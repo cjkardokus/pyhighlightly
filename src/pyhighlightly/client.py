@@ -14,10 +14,11 @@ from the actual httpx call, so an ``AsyncHighlightlyBaseClient`` built on
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 
@@ -27,6 +28,9 @@ from pyhighlightly.exceptions import (
     HighlightlyNotFoundError,
     HighlightlyRateLimitError,
 )
+from pyhighlightly.models.common import PaginatedResponse
+
+_T = TypeVar("_T")
 
 DEFAULT_TIMEOUT = 10.0
 
@@ -237,6 +241,74 @@ class HighlightlyBaseClient:
             self._zero_observed_at = self._now()
         elif requests_remaining is not None:
             self._zero_observed_at = None
+
+    def _with_default(self, params: dict[str, Any], key: str, value: Any) -> dict[str, Any]:
+        """Inject ``value`` under ``key`` into ``params`` if not already set.
+
+        Returns ``params`` unchanged if ``value`` is ``None``, or if
+        ``params`` already has an entry for ``key`` (an explicit caller
+        value always wins). This is a generic dict-merging primitive with no
+        sport-specific knowledge -- it lives here, not on
+        ``AmericanFootballClient``, so any future sport client can reuse it
+        the same way, e.g. to apply a ``default_league`` under whatever
+        parameter name a given endpoint expects (``league``, ``leagueType``,
+        and ``leagueName`` all appear across different Highlightly endpoints
+        for the same underlying concept).
+        """
+        if value is None:
+            return params
+        if key in params:
+            return params
+        return {**params, key: value}
+
+    def paginate(
+        self,
+        fetch_fn: Callable[..., PaginatedResponse[_T]],
+        max_requests: int | None = None,
+        **kwargs: Any,
+    ) -> Iterator[_T]:
+        """Lazily walk every page of a paginated endpoint's results.
+
+        ``fetch_fn`` is a bound endpoint method that returns a
+        ``PaginatedResponse[T]`` and accepts ``offset``/``limit`` keyword
+        arguments (e.g. ``client.get_matches``). Any other keyword arguments
+        given here are forwarded to it unchanged on every page.
+
+        **This is the only way a single logical call spends more than one
+        request.** Base endpoint methods (``get_matches()``, etc.) always
+        cost exactly one request and return exactly one page -- they never
+        paginate on their own. ``paginate()`` is the explicit opt-in for
+        callers who deliberately want more than one page's worth of
+        results, since walking a large result set can burn through a
+        meaningful chunk of a free-tier daily quota from what looks like a
+        single call.
+
+        Pages are fetched lazily: page N+1 is only requested once the
+        caller has consumed every item yielded from page N, so breaking out
+        of a ``for`` loop early caps how many requests are actually spent.
+        Iteration stops once ``pagination.totalCount`` items have been
+        yielded in total, or once ``max_requests`` pages have been fetched,
+        whichever comes first -- pass ``max_requests`` to put a hard
+        ceiling on how much of your quota one call can spend.
+        """
+        offset = kwargs.pop("offset", 0)
+        requests_made = 0
+        total_yielded = 0
+
+        while max_requests is None or requests_made < max_requests:
+            page = fetch_fn(offset=offset, **kwargs)
+            requests_made += 1
+
+            if not page.data:
+                return
+
+            for item in page.data:
+                yield item
+                total_yielded += 1
+                if total_yielded >= page.pagination.totalCount:
+                    return
+
+            offset += len(page.data)
 
     def close(self) -> None:
         """Close the underlying HTTP connection pool."""
