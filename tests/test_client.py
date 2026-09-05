@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 import respx
+from pydantic import BaseModel
 
 from pyhighlightly.client import HighlightlyBaseClient
 from pyhighlightly.exceptions import (
@@ -15,6 +16,7 @@ from pyhighlightly.exceptions import (
     HighlightlyNotFoundError,
     HighlightlyRateLimitError,
 )
+from pyhighlightly.models.common import PaginatedResponse, Pagination, Plan
 
 BASE_URL = "https://example.test"
 
@@ -271,3 +273,82 @@ def test_remaining_above_zero_clears_the_zero_observation() -> None:
     client._request("GET", "/teams")
     assert client._zero_observed_at is None
     assert client.requests_remaining == 5
+
+
+# -- paginate() --
+
+
+class _Item(BaseModel):
+    id: int
+
+
+def _page(items: list[int], total_count: int, offset: int) -> PaginatedResponse[_Item]:
+    return PaginatedResponse[_Item](
+        data=[_Item(id=i) for i in items],
+        pagination=Pagination(totalCount=total_count, offset=offset, limit=2),
+        plan=Plan(tier="BASIC", message="Some results might be hidden with FREE tier"),
+    )
+
+
+def test_paginate_yields_items_across_pages_and_stops_at_total_count() -> None:
+    pages = {
+        0: _page([1, 2], total_count=5, offset=0),
+        2: _page([3, 4], total_count=5, offset=2),
+        4: _page([5], total_count=5, offset=4),
+    }
+    calls: list[int] = []
+
+    def fetch_fn(offset: int = 0, **kwargs: object) -> PaginatedResponse[_Item]:
+        calls.append(offset)
+        return pages[offset]
+
+    client = make_client()
+    items = list(client.paginate(fetch_fn))
+
+    assert [item.id for item in items] == [1, 2, 3, 4, 5]
+    assert calls == [0, 2, 4]
+
+
+def test_paginate_respects_max_requests() -> None:
+    pages = {
+        0: _page([1, 2], total_count=100, offset=0),
+        2: _page([3, 4], total_count=100, offset=2),
+        4: _page([5, 6], total_count=100, offset=4),
+    }
+    calls: list[int] = []
+
+    def fetch_fn(offset: int = 0, **kwargs: object) -> PaginatedResponse[_Item]:
+        calls.append(offset)
+        return pages[offset]
+
+    client = make_client()
+    items = list(client.paginate(fetch_fn, max_requests=2))
+
+    assert [item.id for item in items] == [1, 2, 3, 4]
+    assert calls == [0, 2]
+
+
+def test_paginate_is_lazy() -> None:
+    pages = {
+        0: _page([1, 2], total_count=4, offset=0),
+        2: _page([3, 4], total_count=4, offset=2),
+    }
+    calls: list[int] = []
+
+    def fetch_fn(offset: int = 0, **kwargs: object) -> PaginatedResponse[_Item]:
+        calls.append(offset)
+        return pages[offset]
+
+    client = make_client()
+    generator = client.paginate(fetch_fn)
+
+    assert calls == []  # nothing fetched until the generator is iterated
+
+    assert next(generator).id == 1
+    assert calls == [0]  # only page 1 fetched so far
+
+    assert next(generator).id == 2
+    assert calls == [0]  # page 1's items aren't exhausted yet -- no 2nd fetch
+
+    assert next(generator).id == 3
+    assert calls == [0, 2]  # page 1 exhausted -- page 2 fetched on demand
