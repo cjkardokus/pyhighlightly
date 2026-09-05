@@ -44,8 +44,8 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/pyhighlightly"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "ruff",
     "mypy",
     "pytest",
