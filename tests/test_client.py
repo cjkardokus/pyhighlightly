@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import pytest
 import respx
@@ -167,3 +169,105 @@ def test_zero_remaining_preempts_further_requests_locally() -> None:
         client._request("GET", "/teams")
 
     assert exc_info.value.requests_remaining == 0
+
+
+# -- Stale-zero re-sync (no reset-time header is available from Highlightly;
+# -- see the rate-limiting note on HighlightlyBaseClient) --
+
+
+@respx.mock
+def test_still_preempts_within_the_24_hour_resync_window() -> None:
+    respx.get(f"{BASE_URL}/teams").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True},
+            headers={"x-ratelimit-requests-remaining": "0"},
+        )
+    )
+    client = make_client()
+    t0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    client._now = lambda: t0  # type: ignore[method-assign]
+
+    client._request("GET", "/teams")
+    assert client._zero_observed_at == t0
+
+    client._now = lambda: t0 + timedelta(hours=23)  # type: ignore[method-assign]
+    with pytest.raises(HighlightlyRateLimitError) as exc_info:
+        client._request("GET", "/teams")
+
+    assert exc_info.value.requests_remaining == 0
+
+
+@respx.mock
+def test_resyncs_after_24_hours_and_allows_a_real_request_through() -> None:
+    route = respx.get(f"{BASE_URL}/teams").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True},
+            headers={"x-ratelimit-requests-remaining": "0"},
+        )
+    )
+    client = make_client()
+    t0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    client._now = lambda: t0  # type: ignore[method-assign]
+
+    client._request("GET", "/teams")
+    assert route.call_count == 1
+
+    # More than 24 hours later: the locally-observed zero is no longer
+    # trusted, so this should hit the network again instead of preempting.
+    client._now = lambda: t0 + timedelta(hours=24, minutes=1)  # type: ignore[method-assign]
+    response = client._request("GET", "/teams")
+
+    assert route.call_count == 2
+    assert response.json() == {"ok": True}
+
+
+@respx.mock
+def test_immediate_zero_again_after_resync_restarts_the_window() -> None:
+    respx.get(f"{BASE_URL}/teams").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True},
+            headers={"x-ratelimit-requests-remaining": "0"},
+        )
+    )
+    client = make_client()
+    t0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    client._now = lambda: t0  # type: ignore[method-assign]
+    client._request("GET", "/teams")
+    assert client._zero_observed_at == t0
+
+    # Re-sync fires and the quota is still reported as 0 -- the window
+    # should restart from this new observation, not the original one.
+    t1 = t0 + timedelta(hours=25)
+    client._now = lambda: t1  # type: ignore[method-assign]
+    client._request("GET", "/teams")
+    assert client._zero_observed_at == t1
+
+    client._now = lambda: t1 + timedelta(hours=1)  # type: ignore[method-assign]
+    with pytest.raises(HighlightlyRateLimitError):
+        client._request("GET", "/teams")
+
+
+@respx.mock
+def test_remaining_above_zero_clears_the_zero_observation() -> None:
+    route = respx.get(f"{BASE_URL}/teams")
+    route.side_effect = [
+        httpx.Response(200, json={"ok": True}, headers={"x-ratelimit-requests-remaining": "0"}),
+        httpx.Response(200, json={"ok": True}, headers={"x-ratelimit-requests-remaining": "5"}),
+    ]
+    client = make_client()
+    t0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    client._now = lambda: t0  # type: ignore[method-assign]
+
+    client._request("GET", "/teams")
+    assert client._zero_observed_at == t0
+
+    # Only once the re-sync window has elapsed does a real call go through
+    # again -- that's when a change in the server's reported quota can
+    # actually be observed.
+    client._now = lambda: t0 + timedelta(hours=25)  # type: ignore[method-assign]
+    client._request("GET", "/teams")
+    assert client._zero_observed_at is None
+    assert client.requests_remaining == 5
