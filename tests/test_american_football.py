@@ -11,8 +11,12 @@ import respx
 from pyhighlightly.american_football import AmericanFootballClient
 from pyhighlightly.models.american_football import (
     BoxScoreStatistic,
+    Highlight,
+    HighlightCategory,
     Match,
     MatchDetail,
+    PlayerStatistics,
+    PlayerSummary,
     Standings,
     Team,
 )
@@ -298,7 +302,9 @@ def test_get_matches_omits_league_for_base_client() -> None:
     )
     client = AmericanFootballClient(api_key="test-key")
 
-    client.get_matches()
+    # season=2024 satisfies the "at least one primary filter" requirement;
+    # this test is only checking that "league" itself isn't auto-injected.
+    client.get_matches(season=2024)
 
     assert "league" not in route.calls.last.request.url.params
 
@@ -568,3 +574,196 @@ def test_get_head_to_head_sends_both_team_id_params() -> None:
     params = route.calls.last.request.url.params
     assert params["teamIdOne"] == "1"
     assert params["teamIdTwo"] == "2"
+
+
+# -- "at least one primary filter" validation --
+
+
+def test_get_matches_rejects_only_secondary_params() -> None:
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(ValueError, match="get_matches"):
+        client.get_matches(limit=10, offset=0)
+
+
+@respx.mock
+def test_get_matches_succeeds_with_a_primary_filter() -> None:
+    respx.get(f"{BASE_URL}/matches").mock(
+        return_value=httpx.Response(200, json=_paginated([_MATCH]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    result = client.get_matches(season=2024)
+
+    assert result.data[0].id == 1
+
+
+def test_get_highlights_rejects_only_secondary_params() -> None:
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(ValueError, match="get_highlights"):
+        client.get_highlights(limit=10, offset=0)
+
+
+def test_get_highlights_default_league_counts_as_a_primary_filter() -> None:
+    # NFLClient's default_league="NFL" gets injected under "leagueName" before
+    # the primary-filter check runs, so a zero-explicit-filter call from
+    # NFLClient is *not* rejected the way it would be from the base client.
+    client = NFLClient(api_key="test-key")
+
+    with respx.mock:
+        respx.get(f"{BASE_URL}/highlights").mock(
+            return_value=httpx.Response(200, json=_paginated([_HIGHLIGHT]))
+        )
+        client.get_highlights()  # should not raise
+
+
+# -- get_highlights / get_highlight --
+
+_HIGHLIGHT_MATCH = {
+    "id": 569261,
+    "round": "regular-season",
+    "date": "2026-09-03T23:00:00.000Z",
+    "league": "NCAA",
+    "season": 2026,
+    "homeTeam": _TEAM_NO_LEAGUE,
+    "awayTeam": _TEAM_NO_LEAGUE,
+}
+
+_HIGHLIGHT = {
+    "id": 105289,
+    "type": "VERIFIED",
+    "imgUrl": "https://i.ytimg.com/vi/tKnSG1ZW5W8/hqdefault.jpg",
+    "title": "Game Preview",
+    "description": None,
+    "url": "https://www.youtube.com/watch?v=tKnSG1ZW5W8",
+    "embedUrl": "https://www.youtube.com/embed/tKnSG1ZW5W8",
+    "match": _HIGHLIGHT_MATCH,
+    "channel": "NFL",
+    "source": "youtube",
+    "category": "pre-match-content",
+}
+
+
+@respx.mock
+def test_get_highlights_applies_default_league_for_nfl_client() -> None:
+    route = respx.get(f"{BASE_URL}/highlights").mock(
+        return_value=httpx.Response(200, json=_paginated([_HIGHLIGHT]))
+    )
+    client = NFLClient(api_key="test-key")
+
+    client.get_highlights(season=2024)
+
+    assert route.calls.last.request.url.params["leagueName"] == "NFL"
+
+
+@respx.mock
+def test_get_highlights_omits_league_name_for_base_client() -> None:
+    route = respx.get(f"{BASE_URL}/highlights").mock(
+        return_value=httpx.Response(200, json=_paginated([_HIGHLIGHT]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_highlights(season=2024)
+
+    assert "leagueName" not in route.calls.last.request.url.params
+
+
+@respx.mock
+def test_get_highlight_returns_single_highlight_instance() -> None:
+    respx.get(f"{BASE_URL}/highlights/105289").mock(
+        return_value=httpx.Response(200, json=[_HIGHLIGHT])
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    highlight = client.get_highlight(105289)
+
+    assert isinstance(highlight, Highlight)
+    assert highlight.category == HighlightCategory.PRE_MATCH_CONTENT
+    assert highlight.match.id == 569261
+
+
+def test_highlight_category_parses_known_value() -> None:
+    highlight = Highlight.model_validate(_HIGHLIGHT)
+    assert highlight.category is HighlightCategory.PRE_MATCH_CONTENT
+
+
+def test_highlight_category_coerces_unrecognized_value_to_other() -> None:
+    highlight = Highlight.model_validate({**_HIGHLIGHT, "category": "some-brand-new-category"})
+    assert highlight.category is HighlightCategory.OTHER
+
+
+# -- get_player / get_player_statistics --
+
+_PLAYER_PROFILE = {
+    "id": 36017,
+    "logo": None,
+    "fullName": "Tom Brady",
+    "profile": {
+        "fullName": "Tom Brady",
+        "birthPlace": "San Mateo, CA, USA",
+        "birthDate": "Aug 3, 1977",
+        "height": "6' 4\"",
+        "jersey": "12",
+        "weight": "225 lbs",
+        "isActive": False,
+        "position": {"main": "Quarterback", "abbreviation": "QB"},
+        "draft": {"round": 6, "year": 2000, "pick": 199},
+        "team": _TEAM_NO_LEAGUE,
+    },
+}
+
+_PLAYER_STATISTICS = {
+    "id": 36017,
+    "logo": None,
+    "fullName": "Tom Brady",
+    "perSeason": [
+        {
+            "stats": [
+                {"name": "Total Games Played", "value": 17, "category": "General"},
+                {"name": "Win Percentage", "value": "0.647", "category": "General"},
+                {"name": "Some Unreported Stat", "value": None, "category": "General"},
+            ],
+            "teams": [_TEAM_NO_LEAGUE],
+            "league": "NFL",
+            "season": 2021,
+            "seasonBreakdown": "Entire",
+        }
+    ],
+}
+
+
+@respx.mock
+def test_get_player_returns_player_summary_with_profile() -> None:
+    respx.get(f"{BASE_URL}/players/36017").mock(
+        return_value=httpx.Response(200, json=[_PLAYER_PROFILE])
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    player = client.get_player(36017)
+
+    assert isinstance(player, PlayerSummary)
+    assert player.fullName == "Tom Brady"
+    assert player.profile.jersey == "12"
+    assert player.profile.position.abbreviation == "QB"
+    assert player.profile.draft is not None
+    assert player.profile.draft.year == 2000
+
+
+@respx.mock
+def test_get_player_statistics_returns_per_season_stats() -> None:
+    respx.get(f"{BASE_URL}/players/36017/statistics").mock(
+        return_value=httpx.Response(200, json=[_PLAYER_STATISTICS])
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    stats = client.get_player_statistics(36017)
+
+    assert isinstance(stats, PlayerStatistics)
+    season = stats.perSeason[0]
+    assert season.league == "NFL"
+    assert season.seasonBreakdown == "Entire"
+    values_by_name = {s.name: s.value for s in season.stats}
+    assert values_by_name["Total Games Played"] == 17
+    assert values_by_name["Win Percentage"] == "0.647"
+    assert values_by_name["Some Unreported Stat"] is None

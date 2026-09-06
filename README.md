@@ -53,12 +53,41 @@ long-lived (an Airflow-scheduled poller, a persistent worker) — see the
 "Rate limiting" note on `HighlightlyBaseClient` in `client.py` for the full
 details.
 
-In practice, a reset around midnight UTC has been observed for a key issued
-directly through Highlightly's own platform, which may not match the
-RapidAPI-marketplace behavior described above — Highlightly's own docs say
-accounts aren't synced across the two platforms. The client doesn't assume
-either one; the re-sync logic above works the same regardless of which
+In practice, a reset at midnight UTC has now been confirmed twice,
+independently, for a key issued directly through Highlightly's own platform:
+on two separate days, the dashboard for that key reset to 0% at almost
+exactly midnight UTC, and on the second occasion this project's own live
+validation work made exactly 16 requests after that reset boundary
+mid-session — which matched the dashboard's usage count exactly. This may
+still not match the RapidAPI-marketplace behavior described above —
+Highlightly's own docs say accounts aren't synced across the two platforms —
+and two consistent observations are still not a documented guarantee from
+Highlightly, so it could change without notice. The client doesn't assume
+either mechanism; the re-sync logic above (`_zero_observed_at` and the
+24-hour bounded re-sync) is unchanged and works the same regardless of which
 applies.
+
+## Known Limitations
+
+- **NFL highlight content appears sparse or absent via `get_highlights()`
+  on the free tier.** Investigated directly: querying `/highlights` with
+  `matchId` set to a real, currently-scheduled NFL match's id and no other
+  filter still returned zero results — there's no highlight content indexed
+  for that match at all, not a filtering bug. So an empty page from
+  `NFLClient().get_highlights()` is very likely genuine data sparsity on
+  Highlightly's side, not a bug in this client — see the docstring on
+  `get_highlights()` for the full investigation.
+
+- **Separately, `leagueName`'s filtering reliability on `/highlights` is
+  unconfirmed** — a different problem from the sparsity above, and one that
+  stays relevant once real NFL highlight content exists later in the
+  season. `leagueName="National Football Conference"` was observed
+  returning NCAA matches, meaning the filter may not reliably scope results
+  to the requested league at all: a caller could get incorrectly-scoped
+  results, not just an empty response. Until this is investigated further
+  with real in-season data, spot-check `get_highlights()` results against
+  the returned match/team fields rather than trusting them to be correctly
+  pre-filtered by `leagueName` alone.
 
 ## Development
 

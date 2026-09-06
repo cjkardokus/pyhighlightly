@@ -16,9 +16,13 @@ from typing import Any
 from pyhighlightly.client import HighlightlyBaseClient
 from pyhighlightly.models.american_football import (
     BoxScoreResult,
+    Highlight,
     Lineups,
     Match,
     MatchDetail,
+    Player,
+    PlayerStatistics,
+    PlayerSummary,
     Standings,
     Team,
     TeamBoxScore,
@@ -137,6 +141,13 @@ class AmericanFootballClient(HighlightlyBaseClient):
         how many matches match the filters in total -- it never paginates
         on its own. Use ``client.paginate(client.get_matches, ...)``
         explicitly if you want to walk every page of a large result set.
+
+        Highlightly's docs state: "At least one primary query parameter
+        needs to be specified before you can retrieve the data" for this
+        endpoint (``timezone``/``limit``/``offset`` don't count). That's
+        checked client-side before the network call, so a call missing
+        every primary filter fails fast with ``ValueError`` instead of
+        spending a request on a call the API is documented to reject.
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if date is not None:
@@ -160,6 +171,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         if away_team_display_name is not None:
             params["awayTeamDisplayName"] = away_team_display_name
         params = self._with_default(params, "league", league or self.default_league)
+        self._require_at_least_one(params, {"timezone", "limit", "offset"}, "get_matches")
 
         response = self._request("GET", "/matches", params=params)
         return PaginatedResponse[Match].model_validate(response.json())
@@ -239,3 +251,123 @@ class AmericanFootballClient(HighlightlyBaseClient):
             params={"teamIdOne": team_id_one, "teamIdTwo": team_id_two},
         )
         return [Match.model_validate(item) for item in response.json()]
+
+    def get_players(
+        self,
+        name: str | None = None,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> PaginatedResponse[Player]:
+        """List players matching the given filters.
+
+        Unlike ``get_matches``/``get_highlights``, this endpoint accepts a
+        zero-filter call per its docs -- no primary-parameter requirement
+        applies here, so no client-side validation is added.
+        """
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if name is not None:
+            params["name"] = name
+
+        response = self._request("GET", "/players", params=params)
+        return PaginatedResponse[Player].model_validate(response.json())
+
+    def get_player(self, player_id: int) -> PlayerSummary:
+        """Fetch a single player's profile by id."""
+        response = self._request("GET", f"/players/{player_id}")
+        return PlayerSummary.model_validate(response.json()[0])
+
+    def get_player_statistics(self, player_id: int) -> PlayerStatistics:
+        """Fetch a single player's season-by-season statistics by id."""
+        response = self._request("GET", f"/players/{player_id}/statistics")
+        return PlayerStatistics.model_validate(response.json()[0])
+
+    def get_highlights(
+        self,
+        league_name: str | None = None,
+        date: str | None = None,
+        season: int | None = None,
+        match_id: int | None = None,
+        home_team_id: int | None = None,
+        away_team_id: int | None = None,
+        home_team_name: str | None = None,
+        away_team_name: str | None = None,
+        home_team_abbreviation: str | None = None,
+        away_team_abbreviation: str | None = None,
+        home_team_display_name: str | None = None,
+        away_team_display_name: str | None = None,
+        limit: int = 40,
+        offset: int = 0,
+    ) -> PaginatedResponse[Highlight]:
+        """Fetch one page of highlight clips matching the given filters.
+
+        Highlightly's docs state: "At least one primary query parameter
+        needs to be specified before you can retrieve the data" for this
+        endpoint (``timezone``/``limit``/``offset`` don't count). That's
+        checked client-side before the network call, so a call missing
+        every primary filter fails fast with ``ValueError`` instead of
+        spending a request on a call the API is documented to reject.
+
+        Note: a live check while building this method found the API
+        currently accepts a zero-primary-param call for this endpoint
+        anyway (returns 200, not the documented 400) -- but that's
+        undocumented leniency, not a guarantee, so this validation matches
+        the *documented* contract rather than today's observed behavior.
+
+        **Known limitation 1: NFL highlight content appears sparse or absent
+        on the free tier.** ``NFLClient().get_highlights(...)`` may return
+        an empty page even for filters that clearly should match something.
+        This was investigated directly: querying this endpoint with
+        ``matchId`` set to a real, currently-scheduled NFL match's id (taken
+        from a working ``league="NFL"`` match lookup) and no other filter
+        still returned zero results, meaning there's no highlight content
+        indexed for that match at all -- not a filtering problem. This is
+        not fixable by choosing a different ``default_league`` value -- if
+        this is empty for NFL, that's very likely genuine data sparsity on
+        Highlightly's side, not a bug in this client.
+
+        **Known limitation 2 (separate from the above): ``leagueName``'s
+        filtering reliability is unconfirmed, independent of whether there's
+        currently content to filter for.** ``leagueName="National Football
+        Conference"`` was observed returning NCAA matches -- i.e. the filter
+        may not reliably scope results to the requested league at all, as
+        distinct from there being nothing to return. This matters even once
+        real NFL highlight content exists later in the season: a caller
+        could get incorrectly-scoped results rather than just an empty
+        response. Until this is investigated further with real in-season
+        data, don't trust ``get_highlights()`` results to be correctly
+        pre-filtered by ``leagueName`` alone -- spot-check the returned
+        ``Highlight.match`` (or team) fields against what you asked for.
+        """
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if date is not None:
+            params["date"] = date
+        if season is not None:
+            params["season"] = season
+        if match_id is not None:
+            params["matchId"] = match_id
+        if home_team_id is not None:
+            params["homeTeamId"] = home_team_id
+        if away_team_id is not None:
+            params["awayTeamId"] = away_team_id
+        if home_team_name is not None:
+            params["homeTeamName"] = home_team_name
+        if away_team_name is not None:
+            params["awayTeamName"] = away_team_name
+        if home_team_abbreviation is not None:
+            params["homeTeamAbbreviation"] = home_team_abbreviation
+        if away_team_abbreviation is not None:
+            params["awayTeamAbbreviation"] = away_team_abbreviation
+        if home_team_display_name is not None:
+            params["homeTeamDisplayName"] = home_team_display_name
+        if away_team_display_name is not None:
+            params["awayTeamDisplayName"] = away_team_display_name
+        params = self._with_default(params, "leagueName", league_name or self.default_league)
+        self._require_at_least_one(params, {"timezone", "limit", "offset"}, "get_highlights")
+
+        response = self._request("GET", "/highlights", params=params)
+        return PaginatedResponse[Highlight].model_validate(response.json())
+
+    def get_highlight(self, highlight_id: int) -> Highlight:
+        """Fetch a single highlight clip by id."""
+        response = self._request("GET", f"/highlights/{highlight_id}")
+        return Highlight.model_validate(response.json()[0])
