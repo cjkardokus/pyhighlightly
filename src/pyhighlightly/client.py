@@ -14,14 +14,16 @@ from the actual httpx call, so an ``AsyncHighlightlyBaseClient`` built on
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar, cast
 
 import httpx
 
+from pyhighlightly.cache import CacheBackend, InMemoryCache
 from pyhighlightly.exceptions import (
     HighlightlyAPIError,
     HighlightlyAuthError,
@@ -181,9 +183,24 @@ class HighlightlyBaseClient:
     this client's re-sync logic (``_zero_observed_at`` and the 24-hour
     bounded re-sync above) is deliberately agnostic to it -- it doesn't
     assume or depend on knowing which mechanism applies.
+
+    **Caching.** Every endpoint method's effective cache TTL comes from
+    merging the constructor's ``cache_ttls`` (if given) over this class's
+    ``DEFAULT_CACHE_TTLS`` -- an endpoint named in ``cache_ttls`` uses that
+    value (0 meaning "never cache," honored even when ``enable_cache`` is
+    True); otherwise it falls back to ``DEFAULT_CACHE_TTLS``, and to 0
+    (uncached) if it isn't in either. This base class's own
+    ``DEFAULT_CACHE_TTLS`` is empty, since sensible TTLs depend entirely on
+    a sport's own endpoints and their documented data-refresh cadence (see
+    ``AmericanFootballClient.DEFAULT_CACHE_TTLS`` for real values and the
+    reasoning behind each).
     """
 
     base_url: str | None = None
+
+    #: Per-endpoint default TTLs in seconds, keyed by method name. Empty on
+    #: this sport-agnostic base class -- see the "Caching" note above.
+    DEFAULT_CACHE_TTLS: ClassVar[dict[str, int]] = {}
 
     def __init__(
         self,
@@ -191,6 +208,9 @@ class HighlightlyBaseClient:
         *,
         base_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        cache: CacheBackend | None = None,
+        cache_ttls: dict[str, int] | None = None,
+        enable_cache: bool = True,
     ) -> None:
         if not api_key:
             raise ValueError("api_key is required")
@@ -209,6 +229,10 @@ class HighlightlyBaseClient:
         self._requests_limit: int | None = None
         self._requests_remaining: int | None = None
         self._zero_observed_at: datetime | None = None
+
+        self._cache: CacheBackend = cache if cache is not None else InMemoryCache()
+        self._cache_ttls: dict[str, int] = {**self.DEFAULT_CACHE_TTLS, **(cache_ttls or {})}
+        self.enable_cache = enable_cache
 
     @property
     def requests_limit(self) -> int | None:
@@ -405,3 +429,62 @@ class HighlightlyBaseClient:
 
         raise_for_response(response, rate_limit)
         return response
+
+    def _build_cache_key(self, endpoint_name: str, path: str, params: dict[str, Any]) -> str:
+        """Build a deterministic cache key for one endpoint call.
+
+        Includes ``path`` alongside ``endpoint_name``: some endpoints encode
+        identifying information directly in the URL (e.g. ``get_team(5)``
+        vs. ``get_team(7)`` -- both call ``/teams/5`` and ``/teams/7``, with
+        no query params at all to tell them apart), so the key would
+        otherwise collide between calls for different resources. ``params``
+        is serialized with sorted keys so logically identical calls always
+        produce the same key regardless of kwarg/insertion order.
+        """
+        serialized_params = json.dumps(params, sort_keys=True, default=str)
+        return f"{endpoint_name}:{path}:{serialized_params}"
+
+    def _cached_request(
+        self,
+        endpoint_name: str,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None,
+        parse: Callable[[httpx.Response], _T],
+        *,
+        force_refresh: bool = False,
+    ) -> _T:
+        """Make a request through the cache, honoring TTL/enable_cache/force_refresh.
+
+        ``endpoint_name`` is looked up in the merged ``cache_ttls`` (set in
+        ``__init__``) for its effective TTL; see the "Caching" note on this
+        class for how that merge works. A TTL of 0 means this call never
+        touches the cache backend at all, in either direction -- there's
+        nothing meaningful to check or store.
+
+        When caching does apply (``enable_cache`` is True and the effective
+        TTL is > 0): a cache hit is returned without any network call.
+        ``force_refresh=True`` skips that read -- a fresh request is always
+        made -- but the result is still written back to the cache
+        afterwards, refreshing the entry rather than leaving caching
+        disabled for that key going forward.
+        """
+        ttl = self._cache_ttls.get(endpoint_name, 0)
+        use_cache = self.enable_cache and ttl > 0
+        effective_params = params or {}
+
+        cache_key: str | None = None
+        if use_cache:
+            cache_key = self._build_cache_key(endpoint_name, path, effective_params)
+            if not force_refresh:
+                cached = self._cache.get(cache_key)
+                if cached is not None:
+                    return cast(_T, cached)
+
+        response = self._request(method, path, params=params)
+        result = parse(response)
+
+        if use_cache and cache_key is not None:
+            self._cache.set(cache_key, result, ttl)
+
+        return result

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Any
+from typing import Any, ClassVar
+
+import httpx
 
 from pyhighlightly.client import HighlightlyBaseClient
 from pyhighlightly.models.american_football import (
@@ -63,12 +65,65 @@ class AmericanFootballClient(HighlightlyBaseClient):
     base_url: str | None = "https://american-football.highlightly.net"
     default_league: str | None = None
 
+    #: Per-endpoint default cache TTLs, in seconds. Reasoning per bucket,
+    #: citing Highlightly's documented data-refresh cadence where one
+    #: exists (see the "Caching" note on ``HighlightlyBaseClient`` for how
+    #: these merge with a constructor-supplied ``cache_ttls`` override):
+    #:
+    #: - **Never cached (0):** ``get_matches``, ``get_match``,
+    #:   ``get_box_score``, ``get_highlights`` -- docs say matches/live
+    #:   scores and box scores both refresh "once a minute" and highlights
+    #:   "once a minute" too; any TTL bucket coarser than that would risk
+    #:   serving visibly stale live data. ``get_lineups`` is also never
+    #:   cached: docs say lineups "should be queried up to a few hours
+    #:   before the game starts," implying they're still being finalized
+    #:   during exactly the window callers query them in.
+    #: - **6 hours (21600s):** ``get_teams``, ``get_team`` -- no documented
+    #:   refresh interval; team metadata (name/logo/abbreviation) changes on
+    #:   the order of months, not minutes. ``get_players``, ``get_player`` --
+    #:   docs say the players list refreshes as often as "15 minutes," but
+    #:   roster membership and player bios change infrequently enough in
+    #:   practice that a much longer TTL is used to conserve quota; call
+    #:   with ``force_refresh=True`` if you need to catch a roster change
+    #:   sooner. ``get_player_statistics`` -- docs say "once a day"; caching
+    #:   for 6 hours stays well inside that cadence while still cutting
+    #:   several redundant calls out of a busy polling day.
+    #: - **30 minutes (1800s):** ``get_standings`` -- docs say standings
+    #:   update "up to an hour after a match ... is finished"; half that
+    #:   window is a safety margin against serving data stale past the
+    #:   documented worst case. ``get_team_statistics`` -- docs say
+    #:   "immediately once a match is finished," but between matches this
+    #:   data is static, so 30 minutes trades a little staleness right after
+    #:   a game ends for meaningfully fewer requests the rest of the time.
+    #: - **15 minutes (900s):** ``get_last_five_games``, ``get_head_to_head``
+    #:   -- docs say last-five-games updates "immediately once a game is
+    #:   considered finished" (head-to-head has no documented interval, but
+    #:   is the same kind of "recent game history" query); 15 minutes is a
+    #:   middle ground between that and quota economy.
+    DEFAULT_CACHE_TTLS: ClassVar[dict[str, int]] = {
+        "get_teams": 21600,
+        "get_team": 21600,
+        "get_players": 21600,
+        "get_player": 21600,
+        "get_player_statistics": 21600,
+        "get_standings": 1800,
+        "get_team_statistics": 1800,
+        "get_last_five_games": 900,
+        "get_head_to_head": 900,
+        "get_matches": 0,
+        "get_match": 0,
+        "get_box_score": 0,
+        "get_lineups": 0,
+        "get_highlights": 0,
+    }
+
     def get_teams(
         self,
         name: str | None = None,
         display_name: str | None = None,
         abbreviation: str | None = None,
         league: str | None = None,
+        force_refresh: bool = False,
     ) -> list[Team]:
         """List teams matching the given filters.
 
@@ -78,6 +133,9 @@ class AmericanFootballClient(HighlightlyBaseClient):
         would just be a fiction -- this method's return shape follows what
         the endpoint actually does rather than forcing a shape it doesn't
         have for consistency's sake.
+
+        Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
+        ``force_refresh=True`` to bypass a cached result for this call.
         """
         params: dict[str, Any] = {}
         if name is not None:
@@ -88,19 +146,36 @@ class AmericanFootballClient(HighlightlyBaseClient):
             params["abbreviation"] = abbreviation
         params = self._with_default(params, "league", league or self.default_league)
 
-        response = self._request("GET", "/teams", params=params)
-        return [Team.model_validate(item) for item in response.json()]
+        return self._cached_request(
+            "get_teams",
+            "GET",
+            "/teams",
+            params,
+            lambda response: [Team.model_validate(item) for item in response.json()],
+            force_refresh=force_refresh,
+        )
 
-    def get_team(self, team_id: int) -> Team:
-        """Fetch a single team by id."""
-        response = self._request("GET", f"/teams/{team_id}")
-        return Team.model_validate(response.json()[0])
+    def get_team(self, team_id: int, force_refresh: bool = False) -> Team:
+        """Fetch a single team by id.
+
+        Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
+        ``force_refresh=True`` to bypass a cached result for this call.
+        """
+        return self._cached_request(
+            "get_team",
+            "GET",
+            f"/teams/{team_id}",
+            {},
+            lambda response: Team.model_validate(response.json()[0]),
+            force_refresh=force_refresh,
+        )
 
     def get_team_statistics(
         self,
         team_id: int,
         from_date: str | date,
         timezone: str | None = None,
+        force_refresh: bool = False,
     ) -> TeamStatistics:
         """Fetch a team's season statistics as of ``from_date``.
 
@@ -112,12 +187,21 @@ class AmericanFootballClient(HighlightlyBaseClient):
         plain ``date`` object is also accepted for ergonomic direct use. A
         string not already in that format raises ``ValueError`` rather than
         being sent to the API as-is.
+
+        Cached for 30 minutes by default (see ``DEFAULT_CACHE_TTLS``); pass
+        ``force_refresh=True`` to bypass a cached result for this call.
         """
         params: dict[str, Any] = {"fromDate": _format_from_date(from_date)}
         params = self._with_default(params, "timezone", timezone)
 
-        response = self._request("GET", f"/teams/statistics/{team_id}", params=params)
-        return TeamStatistics.model_validate(response.json()[0])
+        return self._cached_request(
+            "get_team_statistics",
+            "GET",
+            f"/teams/statistics/{team_id}",
+            params,
+            lambda response: TeamStatistics.model_validate(response.json()[0]),
+            force_refresh=force_refresh,
+        )
 
     def get_matches(
         self,
@@ -134,6 +218,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         league: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        force_refresh: bool = False,
     ) -> PaginatedResponse[Match]:
         """Fetch one page of matches matching the given filters.
 
@@ -148,6 +233,10 @@ class AmericanFootballClient(HighlightlyBaseClient):
         checked client-side before the network call, so a call missing
         every primary filter fails fast with ``ValueError`` instead of
         spending a request on a call the API is documented to reject.
+
+        Never cached (see ``DEFAULT_CACHE_TTLS``): match/live-score data
+        refreshes "once a minute" per the docs, so ``force_refresh`` has no
+        effect here beyond what already happens on every call.
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if date is not None:
@@ -173,15 +262,30 @@ class AmericanFootballClient(HighlightlyBaseClient):
         params = self._with_default(params, "league", league or self.default_league)
         self._require_at_least_one(params, {"timezone", "limit", "offset"}, "get_matches")
 
-        response = self._request("GET", "/matches", params=params)
-        return PaginatedResponse[Match].model_validate(response.json())
+        return self._cached_request(
+            "get_matches",
+            "GET",
+            "/matches",
+            params,
+            lambda response: PaginatedResponse[Match].model_validate(response.json()),
+            force_refresh=force_refresh,
+        )
 
-    def get_match(self, match_id: int) -> MatchDetail:
+    def get_match(self, match_id: int, force_refresh: bool = False) -> MatchDetail:
         """Fetch full detail for a single match, including venue, weather,
         per-team statistics, injuries, play-by-play events, and predictions.
+
+        Never cached (see ``DEFAULT_CACHE_TTLS``): a match in progress
+        changes at least as fast as the matches list itself.
         """
-        response = self._request("GET", f"/matches/{match_id}")
-        return MatchDetail.model_validate(response.json()[0])
+        return self._cached_request(
+            "get_match",
+            "GET",
+            f"/matches/{match_id}",
+            {},
+            lambda response: MatchDetail.model_validate(response.json()[0]),
+            force_refresh=force_refresh,
+        )
 
     def get_standings(
         self,
@@ -191,6 +295,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         year: int | None = None,
         limit: int = 10,
         offset: int = 0,
+        force_refresh: bool = False,
     ) -> PaginatedResponse[Standings]:
         """Fetch standings groups matching the given filters.
 
@@ -206,6 +311,9 @@ class AmericanFootballClient(HighlightlyBaseClient):
         pagination over one ``Standings`` group per (conference, season
         type) combination -- not a bare single object, despite what a
         single-example doc reading might suggest.
+
+        Cached for 30 minutes by default (see ``DEFAULT_CACHE_TTLS``); pass
+        ``force_refresh=True`` to bypass a cached result for this call.
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if league_name is not None:
@@ -216,70 +324,151 @@ class AmericanFootballClient(HighlightlyBaseClient):
             params["year"] = year
         params = self._with_default(params, "leagueType", league_type or self.default_league)
 
-        response = self._request("GET", "/standings", params=params)
-        return PaginatedResponse[Standings].model_validate(response.json())
+        return self._cached_request(
+            "get_standings",
+            "GET",
+            "/standings",
+            params,
+            lambda response: PaginatedResponse[Standings].model_validate(response.json()),
+            force_refresh=force_refresh,
+        )
 
-    def get_lineups(self, match_id: int) -> Lineups:
-        """Fetch both teams' lineups for a match."""
-        response = self._request("GET", f"/lineups/{match_id}")
-        return Lineups.model_validate(response.json())
+    def get_lineups(self, match_id: int, force_refresh: bool = False) -> Lineups:
+        """Fetch both teams' lineups for a match.
 
-    def get_box_score(self, match_id: int) -> BoxScoreResult:
+        Never cached (see ``DEFAULT_CACHE_TTLS``): per the docs, lineups
+        "should be queried up to a few hours before the game starts" --
+        exactly the window in which they're still being finalized.
+        """
+        return self._cached_request(
+            "get_lineups",
+            "GET",
+            f"/lineups/{match_id}",
+            {},
+            lambda response: Lineups.model_validate(response.json()),
+            force_refresh=force_refresh,
+        )
+
+    def get_box_score(self, match_id: int, force_refresh: bool = False) -> BoxScoreResult:
         """Fetch both teams' box scores for a match.
 
         The raw API response is an unlabeled ``[homeTeam, awayTeam]`` array
         (each element further wrapped in a ``"team"`` key -- see
         ``BoxScoreResult``'s docstring); this unwraps both into the named
         ``.home``/``.away`` result rather than exposing that raw shape.
+
+        Never cached (see ``DEFAULT_CACHE_TTLS``): docs say box scores
+        refresh "every minute."
         """
-        home_raw, away_raw = self._request("GET", f"/box-score/{match_id}").json()
-        return BoxScoreResult(
-            home=TeamBoxScore.model_validate(home_raw["team"]),
-            away=TeamBoxScore.model_validate(away_raw["team"]),
+
+        def parse(response: httpx.Response) -> BoxScoreResult:
+            home_raw, away_raw = response.json()
+            return BoxScoreResult(
+                home=TeamBoxScore.model_validate(home_raw["team"]),
+                away=TeamBoxScore.model_validate(away_raw["team"]),
+            )
+
+        return self._cached_request(
+            "get_box_score",
+            "GET",
+            f"/box-score/{match_id}",
+            {},
+            parse,
+            force_refresh=force_refresh,
         )
 
-    def get_last_five_games(self, team_id: int) -> list[Match]:
-        """Fetch a team's five most recently completed matches."""
-        response = self._request("GET", "/last-five-games", params={"teamId": team_id})
-        return [Match.model_validate(item) for item in response.json()]
+    def get_last_five_games(self, team_id: int, force_refresh: bool = False) -> list[Match]:
+        """Fetch a team's five most recently completed matches.
 
-    def get_head_to_head(self, team_id_one: int, team_id_two: int) -> list[Match]:
-        """Fetch the match history between two teams."""
-        response = self._request(
+        Cached for 15 minutes by default (see ``DEFAULT_CACHE_TTLS``); pass
+        ``force_refresh=True`` to bypass a cached result for this call.
+        """
+        return self._cached_request(
+            "get_last_five_games",
+            "GET",
+            "/last-five-games",
+            {"teamId": team_id},
+            lambda response: [Match.model_validate(item) for item in response.json()],
+            force_refresh=force_refresh,
+        )
+
+    def get_head_to_head(
+        self, team_id_one: int, team_id_two: int, force_refresh: bool = False
+    ) -> list[Match]:
+        """Fetch the match history between two teams.
+
+        Cached for 15 minutes by default (see ``DEFAULT_CACHE_TTLS``); pass
+        ``force_refresh=True`` to bypass a cached result for this call.
+        """
+        return self._cached_request(
+            "get_head_to_head",
             "GET",
             "/head-2-head",
-            params={"teamIdOne": team_id_one, "teamIdTwo": team_id_two},
+            {"teamIdOne": team_id_one, "teamIdTwo": team_id_two},
+            lambda response: [Match.model_validate(item) for item in response.json()],
+            force_refresh=force_refresh,
         )
-        return [Match.model_validate(item) for item in response.json()]
 
     def get_players(
         self,
         name: str | None = None,
         limit: int = 1000,
         offset: int = 0,
+        force_refresh: bool = False,
     ) -> PaginatedResponse[Player]:
         """List players matching the given filters.
 
         Unlike ``get_matches``/``get_highlights``, this endpoint accepts a
         zero-filter call per its docs -- no primary-parameter requirement
         applies here, so no client-side validation is added.
+
+        Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
+        ``force_refresh=True`` to bypass a cached result for this call.
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if name is not None:
             params["name"] = name
 
-        response = self._request("GET", "/players", params=params)
-        return PaginatedResponse[Player].model_validate(response.json())
+        return self._cached_request(
+            "get_players",
+            "GET",
+            "/players",
+            params,
+            lambda response: PaginatedResponse[Player].model_validate(response.json()),
+            force_refresh=force_refresh,
+        )
 
-    def get_player(self, player_id: int) -> PlayerSummary:
-        """Fetch a single player's profile by id."""
-        response = self._request("GET", f"/players/{player_id}")
-        return PlayerSummary.model_validate(response.json()[0])
+    def get_player(self, player_id: int, force_refresh: bool = False) -> PlayerSummary:
+        """Fetch a single player's profile by id.
 
-    def get_player_statistics(self, player_id: int) -> PlayerStatistics:
-        """Fetch a single player's season-by-season statistics by id."""
-        response = self._request("GET", f"/players/{player_id}/statistics")
-        return PlayerStatistics.model_validate(response.json()[0])
+        Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
+        ``force_refresh=True`` to bypass a cached result for this call.
+        """
+        return self._cached_request(
+            "get_player",
+            "GET",
+            f"/players/{player_id}",
+            {},
+            lambda response: PlayerSummary.model_validate(response.json()[0]),
+            force_refresh=force_refresh,
+        )
+
+    def get_player_statistics(
+        self, player_id: int, force_refresh: bool = False
+    ) -> PlayerStatistics:
+        """Fetch a single player's season-by-season statistics by id.
+
+        Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
+        ``force_refresh=True`` to bypass a cached result for this call.
+        """
+        return self._cached_request(
+            "get_player_statistics",
+            "GET",
+            f"/players/{player_id}/statistics",
+            {},
+            lambda response: PlayerStatistics.model_validate(response.json()[0]),
+            force_refresh=force_refresh,
+        )
 
     def get_highlights(
         self,
@@ -297,6 +486,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         away_team_display_name: str | None = None,
         limit: int = 40,
         offset: int = 0,
+        force_refresh: bool = False,
     ) -> PaginatedResponse[Highlight]:
         """Fetch one page of highlight clips matching the given filters.
 
@@ -337,6 +527,9 @@ class AmericanFootballClient(HighlightlyBaseClient):
         data, don't trust ``get_highlights()`` results to be correctly
         pre-filtered by ``leagueName`` alone -- spot-check the returned
         ``Highlight.match`` (or team) fields against what you asked for.
+
+        Never cached (see ``DEFAULT_CACHE_TTLS``): docs say highlights
+        refresh "once a minute."
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if date is not None:
@@ -364,10 +557,28 @@ class AmericanFootballClient(HighlightlyBaseClient):
         params = self._with_default(params, "leagueName", league_name or self.default_league)
         self._require_at_least_one(params, {"timezone", "limit", "offset"}, "get_highlights")
 
-        response = self._request("GET", "/highlights", params=params)
-        return PaginatedResponse[Highlight].model_validate(response.json())
+        return self._cached_request(
+            "get_highlights",
+            "GET",
+            "/highlights",
+            params,
+            lambda response: PaginatedResponse[Highlight].model_validate(response.json()),
+            force_refresh=force_refresh,
+        )
 
-    def get_highlight(self, highlight_id: int) -> Highlight:
-        """Fetch a single highlight clip by id."""
-        response = self._request("GET", f"/highlights/{highlight_id}")
-        return Highlight.model_validate(response.json()[0])
+    def get_highlight(self, highlight_id: int, force_refresh: bool = False) -> Highlight:
+        """Fetch a single highlight clip by id.
+
+        Not in ``DEFAULT_CACHE_TTLS`` (uncached): a single highlight's own
+        metadata is static once published, but there's no documented
+        refresh cadence for this specific lookup and it's cheap/rare enough
+        to call that caching it isn't worth the complexity here.
+        """
+        return self._cached_request(
+            "get_highlight",
+            "GET",
+            f"/highlights/{highlight_id}",
+            {},
+            lambda response: Highlight.model_validate(response.json()[0]),
+            force_refresh=force_refresh,
+        )
