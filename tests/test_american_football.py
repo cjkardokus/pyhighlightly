@@ -480,10 +480,37 @@ def test_get_match_returns_match_detail_with_nested_fields() -> None:
     assert match.forecast.temperature == "11.97°C"
     assert match.matchStatistics is not None
     assert match.matchStatistics.homeTeam.statistics[0].name == "Rushing Attempts"
+    assert match.injuries is not None
     assert match.injuries[0].data[0].player.name == "Alvin Kamara"
+    assert match.events is not None
     assert match.events[0].result == "Punt"
     assert match.predictions is not None
     assert match.predictions.prematch[0].probabilities.away == "69.78%"
+
+
+@respx.mock
+def test_get_match_parses_explicit_null_injuries_and_events() -> None:
+    # Regression test: Highlightly sends "injuries": null / "events": null
+    # explicitly (not merely omitting the keys) for real finished matches
+    # -- confirmed live, 3/3, on 2026-09-06. A bare
+    # `list[...] = Field(default_factory=list)` only supplies its default
+    # for an *absent* key; it does nothing for a key present with an
+    # explicit JSON null, so this exact shape used to raise a
+    # ValidationError (wrapped as HighlightlyResponseError) instead of
+    # parsing -- get_match() was broken for real finished games. Setting
+    # the keys to None explicitly here, not omitting them, is the point:
+    # an absent-key fixture would not have caught this.
+    match_detail_with_explicit_nulls = {**_MATCH_DETAIL, "injuries": None, "events": None}
+    respx.get(f"{BASE_URL}/matches/1").mock(
+        return_value=httpx.Response(200, json=[match_detail_with_explicit_nulls])
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    match = client.get_match(1)
+
+    assert isinstance(match, MatchDetail)
+    assert match.injuries is None
+    assert match.events is None
 
 
 @respx.mock

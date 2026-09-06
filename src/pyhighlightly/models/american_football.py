@@ -261,13 +261,32 @@ class MatchDetail(Match):
     querying a specific match by id. These are all optional: some (e.g.
     ``matchStatistics``, ``predictions``) may genuinely be absent for a
     match that hasn't started yet or has no odds/stats coverage.
+
+    ``injuries`` and ``events`` are ``None``, not just an empty list --
+    confirmed against 3 real, completed NFL matches on 2026-09-06, all
+    three of which had ``"injuries": null`` and ``"events": null``
+    explicitly present in the response (not merely absent). A bare
+    ``list[...] = Field(default_factory=list)`` only supplies its default
+    when the key is *missing*; it does nothing for a key that's present
+    with an explicit JSON ``null``, so that shape previously failed
+    validation outright -- ``get_match()`` raised instead of returning
+    data for every one of those matches.
+
+    Whether ``None`` and ``[]`` mean the same thing here (Highlightly
+    simply doesn't distinguish "no injuries/events" from "not tracked")
+    or could differ in some case not covered by this sample is unconfirmed
+    either way -- all 3 samples were ``null``, none was an empty list, so
+    there's no observed case to compare against. Treat ``None`` as "no
+    injuries reported" / "no events recorded" (the practical reading, and
+    equivalent to treating it as empty), but don't assume that's
+    guaranteed distinct from -- or identical to -- a future observed `[]`.
     """
 
     venue: Venue | None = None
     forecast: Forecast | None = None
     matchStatistics: MatchStatistics | None = None
-    injuries: list[Injury] = Field(default_factory=list)
-    events: list[MatchEvent] = Field(default_factory=list)
+    injuries: list[Injury] | None = None
+    events: list[MatchEvent] | None = None
     predictions: Predictions | None = None
 
 
