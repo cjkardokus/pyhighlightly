@@ -53,6 +53,13 @@ long-lived (an Airflow-scheduled poller, a persistent worker) — see the
 "Rate limiting" note on `HighlightlyBaseClient` in `client.py` for the full
 details.
 
+In practice, a reset around midnight UTC has been observed for a key issued
+directly through Highlightly's own platform, which may not match the
+RapidAPI-marketplace behavior described above — Highlightly's own docs say
+accounts aren't synced across the two platforms. The client doesn't assume
+either one; the re-sync logic above works the same regardless of which
+applies.
+
 ## Development
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management
