@@ -8,6 +8,7 @@ from typing import Any, cast
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 from pyhighlightly.american_football import AmericanFootballClient
 from pyhighlightly.exceptions import HighlightlyNotFoundError, HighlightlyResponseError
@@ -22,6 +23,7 @@ from pyhighlightly.models.american_football import (
     PlayerSummary,
     Standings,
     Team,
+    TeamStatistic,
 )
 from pyhighlightly.nfl import NFLClient
 
@@ -706,6 +708,25 @@ def test_box_score_statistic_value_accepts_loosely_typed_values(
 ) -> None:
     stat = BoxScoreStatistic(group="Passing", name="Some Stat", value=value)
     assert stat.value == value
+
+
+@pytest.mark.parametrize("value", [7, 10.5, "150"])
+def test_team_statistic_value_accepts_loosely_typed_non_null_values(
+    value: int | float | str,
+) -> None:
+    stat = TeamStatistic(name="Rushing Attempts", value=value)
+    assert stat.value == value
+
+
+def test_team_statistic_value_currently_rejects_none() -> None:
+    # Locks in the current non-nullable assumption on TeamStatistic.value
+    # (see its docstring): last checked live against get_match() on
+    # 2026-09-06 across 3 completed matches (204 individual statistics),
+    # no null was observed. If Highlightly is ever seen sending a null
+    # here, this test should be updated to expect acceptance (and the
+    # model's `| None` added) rather than just deleted.
+    with pytest.raises(ValidationError):
+        TeamStatistic(name="Rushing Attempts", value=None)  # type: ignore[arg-type]
 
 
 # -- get_last_five_games / get_head_to_head --
