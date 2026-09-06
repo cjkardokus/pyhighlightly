@@ -192,6 +192,37 @@ def test_with_default_skips_none_value() -> None:
     assert client._with_default(params, "league", client.default_league) == {"season": 2024}
 
 
+# -- Team.logo nullability --
+
+
+def test_team_parses_explicit_null_logo() -> None:
+    # Regression test: confirmed live that Highlightly sends an explicit
+    # "logo": null (not an omitted key) for smaller-program teams --
+    # 5/100 matches on 2026-09-05. A required `str` crashed on this shape.
+    team = Team.model_validate({**_TEAM, "logo": None})
+    assert team.logo is None
+
+
+@respx.mock
+def test_get_matches_parses_a_team_with_explicit_null_logo() -> None:
+    # End-to-end version of the model-level test above: a match where one
+    # side's logo is explicitly null used to crash get_matches() outright
+    # rather than just that one field coming back as None.
+    match_with_null_logo = {
+        **_MATCH,
+        "awayTeam": {**_TEAM_NO_LEAGUE, "logo": None},
+    }
+    respx.get(f"{BASE_URL}/matches").mock(
+        return_value=httpx.Response(200, json=_paginated([match_with_null_logo]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    result = client.get_matches(season=2024)
+
+    assert result.data[0].awayTeam.logo is None
+    assert result.data[0].homeTeam.logo is not None
+
+
 # -- get_teams --
 
 
