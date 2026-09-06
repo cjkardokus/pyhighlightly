@@ -76,9 +76,17 @@ class MatchStateInfo(BaseModel):
     """The live/final state of a match, as nested under ``Match.state``."""
 
     period: int
-    #: An elapsed-time clock. Seen as a plain int (seconds/minutes) on
-    #: ``Match.state`` and as a "MM:SS" string within ``MatchEvent`` markers.
-    clock: int | str
+    #: An elapsed-time clock, in seconds. Was previously typed ``int | str``
+    #: on the strength of a comment that turned out to be citing evidence
+    #: for a different field (``MatchEventMarker.clock``, which really is a
+    #: "MM:SS" string -- that model is typed separately and correctly).
+    #: No fixture or observation ever actually showed *this* field --
+    #: ``Match.state.clock`` -- as a string. Checked live against 3
+    #: separate in-progress games on 2026-09-06 (two NCAA games at
+    #: period 3, one at period 2) and all three reported a plain int;
+    #: narrowed accordingly. If Highlightly is ever seen sending a string
+    #: here, re-widen and cite the actual observation, not a borrowed one.
+    clock: int
     description: str
     score: Score
     report: str | None = None

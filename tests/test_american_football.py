@@ -18,9 +18,11 @@ from pyhighlightly.models.american_football import (
     HighlightCategory,
     Match,
     MatchDetail,
+    MatchStateInfo,
     Player,
     PlayerStatistics,
     PlayerSummary,
+    Score,
     Standings,
     Team,
     TeamStatistic,
@@ -754,6 +756,26 @@ def test_team_statistic_value_currently_rejects_none() -> None:
     # model's `| None` added) rather than just deleted.
     with pytest.raises(ValidationError):
         TeamStatistic(name="Rushing Attempts", value=None)  # type: ignore[arg-type]
+
+
+def test_match_state_info_clock_accepts_int() -> None:
+    state = MatchStateInfo(period=3, clock=31, description="In progress", score=Score())
+    assert state.clock == 31
+
+
+def test_match_state_info_clock_currently_rejects_mm_ss_string() -> None:
+    # Locks in the narrowed type (see the docstring comment on `clock`):
+    # 3 separate in-progress games checked live on 2026-09-06 all reported
+    # clock as a plain int, not a "MM:SS" string like MatchEventMarker's
+    # own (differently-named) clock field uses. Deliberately not a numeric
+    # string like "31" here -- pydantic coerces those to int regardless of
+    # this field's declared type, so that wouldn't test the distinction
+    # that actually matters. If Highlightly is ever seen sending a
+    # "MM:SS"-shaped string on this field, this test should be updated to
+    # expect acceptance (and the model re-widened to int | str) rather
+    # than just deleted.
+    with pytest.raises(ValidationError):
+        MatchStateInfo(period=3, clock="11:43", description="In progress", score=Score())  # type: ignore[arg-type]
 
 
 # -- get_last_five_games / get_head_to_head --
