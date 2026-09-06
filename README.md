@@ -60,6 +60,41 @@ differ. Every endpoint method returns typed pydantic models (or a
 `PaginatedResponse` wrapping them), so your editor/type-checker knows the
 shape of the response without you having to look it up.
 
+## Working with loosely-typed stat values
+
+One place that "your editor/type-checker knows the shape" needs a caveat:
+`BoxScoreStatistic.value`, `PlayerStat.value`, and `TeamStatistic.value` are
+typed `int | float | str` (the first two also allow `None`) rather than a
+single numeric type, because Highlightly genuinely sends a mix of raw
+numbers and pre-formatted strings for these fields — see each model's own
+docstring for the observed evidence. Coercing them all to `float` up front
+would either fail outright or silently corrupt the non-numeric ones, so code
+that wants to do arithmetic on a stat has to narrow it first:
+
+```python
+from pyhighlightly.models.american_football import BoxScoreStatistic
+
+
+def as_float(stat: BoxScoreStatistic) -> float | None:
+    """Narrow a loosely-typed stat value to a float, or None if it isn't one."""
+    if isinstance(stat.value, (int, float)):
+        return float(stat.value)
+    return None
+```
+
+The same `isinstance` check works inline wherever you need a number back out
+of one of these fields — the loose type is deliberate fidelity to what the
+API actually sends, not a gap you're expected to work around by guessing.
+
+**A JSON `true`/`false` value is indistinguishable from `1`/`0` by the time
+you read it.** `bool` is a subclass of `int` in Python, and pydantic
+resolves a `true`/`false` input against the `int` branch of this union by
+converting it to a genuine `int` — `BoxScoreStatistic(value=True).value` is
+`1` (an actual `int`, not `True`), and there's no `isinstance(x, bool)` check
+you can add downstream to recover which one it originally was. Usually
+harmless, but worth knowing before comparing a stat's value against `1` and
+getting a match you didn't expect.
+
 ## Extending this client
 
 This client's class hierarchy is deliberately built to extend beyond the NFL:

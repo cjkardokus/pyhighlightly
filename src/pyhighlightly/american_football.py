@@ -186,7 +186,10 @@ class AmericanFootballClient(HighlightlyBaseClient):
     def get_team(self, team_id: int, *, force_refresh: bool = False) -> Team:
         """Fetch a single team by id.
 
-        Raises ``HighlightlyNotFoundError`` if ``team_id`` doesn't exist.
+        The response wraps this single resource in a one-element array
+        rather than returning it bare -- see ``_first_or_not_found`` for
+        why, and for what an empty array (``team_id`` doesn't exist)
+        means. Raises ``HighlightlyNotFoundError`` in that case.
 
         Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
@@ -221,7 +224,10 @@ class AmericanFootballClient(HighlightlyBaseClient):
         string not already in that format raises ``ValueError`` rather than
         being sent to the API as-is.
 
-        Raises ``HighlightlyNotFoundError`` if ``team_id`` doesn't exist.
+        The response wraps this single resource in a one-element array
+        rather than returning it bare -- see ``_first_or_not_found`` for
+        why, and for what an empty array (``team_id`` doesn't exist)
+        means. Raises ``HighlightlyNotFoundError`` in that case.
 
         Cached for 30 minutes by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
@@ -323,7 +329,10 @@ class AmericanFootballClient(HighlightlyBaseClient):
         """Fetch full detail for a single match, including venue, weather,
         per-team statistics, injuries, play-by-play events, and predictions.
 
-        Raises ``HighlightlyNotFoundError`` if ``match_id`` doesn't exist.
+        The response wraps this single resource in a one-element array
+        rather than returning it bare -- see ``_first_or_not_found`` for
+        why, and for what an empty array (``match_id`` doesn't exist)
+        means. Raises ``HighlightlyNotFoundError`` in that case.
 
         Never cached (see ``DEFAULT_CACHE_TTLS``): a match in progress
         changes at least as fast as the matches list itself.
@@ -388,6 +397,14 @@ class AmericanFootballClient(HighlightlyBaseClient):
 
     def get_lineups(self, match_id: int, *, force_refresh: bool = False) -> Lineups:
         """Fetch both teams' lineups for a match.
+
+        Unlike every other endpoint on this client, the response here is a
+        bare ``{"home": {...}, "away": {...}}`` object -- no array wrapper
+        (contrast the six single-resource endpoints that wrap in a
+        one-element array, see ``_first_or_not_found``) and no
+        ``data``/``pagination``/``plan`` envelope either. Confirmed
+        against a live response: this matched the documented/expected
+        shape exactly, with no corrections needed.
 
         Never cached (see ``DEFAULT_CACHE_TTLS``): per the docs, lineups
         "should be queried up to a few hours before the game starts" --
@@ -455,6 +472,15 @@ class AmericanFootballClient(HighlightlyBaseClient):
     def get_last_five_games(self, team_id: int, *, force_refresh: bool = False) -> list[Match]:
         """Fetch a team's five most recently completed matches.
 
+        Returns a plain ``list[Match]`` rather than ``PaginatedResponse[Match]``,
+        matching the written docs' example response, which shows a bare
+        array with no ``data``/``pagination``/``plan`` envelope -- unlike
+        ``get_standings``, whose envelope a live check found the docs'
+        single-example reading had gotten wrong. This one was implemented
+        from the documented shape directly and has not been independently
+        confirmed against a live response the way ``get_standings``/
+        ``get_lineups``/``get_box_score`` were.
+
         Cached for 15 minutes by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
         """
@@ -471,6 +497,15 @@ class AmericanFootballClient(HighlightlyBaseClient):
         self, team_id_one: int, team_id_two: int, *, force_refresh: bool = False
     ) -> list[Match]:
         """Fetch the match history between two teams.
+
+        Returns a plain ``list[Match]`` rather than ``PaginatedResponse[Match]``,
+        matching the written docs' example response, which shows a bare
+        array with no ``data``/``pagination``/``plan`` envelope -- unlike
+        ``get_standings``, whose envelope a live check found the docs'
+        single-example reading had gotten wrong. This one was implemented
+        from the documented shape directly and has not been independently
+        confirmed against a live response the way ``get_standings``/
+        ``get_lineups``/``get_box_score`` were.
 
         Cached for 15 minutes by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
@@ -498,6 +533,27 @@ class AmericanFootballClient(HighlightlyBaseClient):
         zero-filter call per its docs -- no primary-parameter requirement
         applies here, so no client-side validation is added.
 
+        **Unlike every other list endpoint on this client
+        (``get_teams``, ``get_matches``, ``get_standings``,
+        ``get_highlights``), results here are never scoped to a league --
+        not even when called via ``NFLClient``.** This is deliberate, not
+        an oversight: ``/players`` genuinely has no league-scoping
+        parameter to apply ``default_league`` to. Confirmed two ways --
+        Highlightly's own documentation lists exactly three query
+        parameters for this endpoint (``name``, ``limit``, ``offset``, no
+        ``league``/``leagueName``/``leagueType`` among them), and a live
+        request adding ``league=NFL`` anyway was rejected outright with
+        HTTP 400 (``{"message": "property league should not exist"}``) --
+        this isn't a case of the API silently ignoring an unrecognized
+        param, it's actively rejected. So ``NFLClient().get_players()``
+        returns players from every league on the American Football host,
+        NCAA included, and there is currently no way to ask this endpoint
+        for NFL-only players. If that matters for your use case, filter
+        the returned ``Player`` objects client-side (there's no per-player
+        league field to filter on in this endpoint's response shape
+        either, so that would have to come from cross-referencing against
+        ``get_teams()`` or similar).
+
         Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
         """
@@ -517,7 +573,10 @@ class AmericanFootballClient(HighlightlyBaseClient):
     def get_player(self, player_id: int, *, force_refresh: bool = False) -> PlayerSummary:
         """Fetch a single player's profile by id.
 
-        Raises ``HighlightlyNotFoundError`` if ``player_id`` doesn't exist.
+        The response wraps this single resource in a one-element array
+        rather than returning it bare -- see ``_first_or_not_found`` for
+        why, and for what an empty array (``player_id`` doesn't exist)
+        means. Raises ``HighlightlyNotFoundError`` in that case.
 
         Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
@@ -538,7 +597,10 @@ class AmericanFootballClient(HighlightlyBaseClient):
     ) -> PlayerStatistics:
         """Fetch a single player's season-by-season statistics by id.
 
-        Raises ``HighlightlyNotFoundError`` if ``player_id`` doesn't exist.
+        The response wraps this single resource in a one-element array
+        rather than returning it bare -- see ``_first_or_not_found`` for
+        why, and for what an empty array (``player_id`` doesn't exist)
+        means. Raises ``HighlightlyNotFoundError`` in that case.
 
         Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
@@ -664,7 +726,10 @@ class AmericanFootballClient(HighlightlyBaseClient):
     def get_highlight(self, highlight_id: int, *, force_refresh: bool = False) -> Highlight:
         """Fetch a single highlight clip by id.
 
-        Raises ``HighlightlyNotFoundError`` if ``highlight_id`` doesn't exist.
+        The response wraps this single resource in a one-element array
+        rather than returning it bare -- see ``_first_or_not_found`` for
+        why, and for what an empty array (``highlight_id`` doesn't exist)
+        means. Raises ``HighlightlyNotFoundError`` in that case.
 
         Not in ``DEFAULT_CACHE_TTLS`` (uncached): a single highlight's own
         metadata is static once published, but there's no documented
