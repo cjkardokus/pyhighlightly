@@ -80,12 +80,16 @@ indent-style = "space"
 [tool.mypy]
 python_version = "3.10"
 strict = true
-packages = ["pyhighlightly"]
+# `files`, not `packages`: CI and the README both invoke `mypy .`, and an
+# explicit path argument on the command line overrides `packages`/`files`
+# from config -- so `packages = ["pyhighlightly"]` (src only) previously
+# meant a bare `uv run mypy` checked something narrower than what CI
+# actually runs. Removing `packages` outright isn't enough on its own --
+# with no `files`/`packages`/`modules` set at all, a bare `mypy` has
+# nothing to check and errors out instead of matching `mypy .`. Listing
+# both directories here makes the two invocations agree.
+files = ["src", "tests"]
 mypy_path = "src"
-
-[[tool.mypy.overrides]]
-module = "tests.*"
-disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
