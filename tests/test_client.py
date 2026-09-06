@@ -17,8 +17,10 @@ from pyhighlightly.exceptions import (
     HighlightlyRateLimitError,
 )
 from pyhighlightly.models.common import PaginatedResponse, Pagination, Plan
+from pyhighlightly.nfl import NFLClient
 
 BASE_URL = "https://example.test"
+NFL_BASE_URL = "https://american-football.highlightly.net"
 
 
 def make_client() -> HighlightlyBaseClient:
@@ -352,3 +354,37 @@ def test_paginate_is_lazy() -> None:
 
     assert next(generator).id == 3
     assert calls == [0, 2]  # page 1 exhausted -- page 2 fetched on demand
+
+
+# -- context manager / close() --
+
+
+def test_close_closes_the_underlying_http_client() -> None:
+    client = make_client()
+    assert client._client.is_closed is False
+
+    client.close()
+
+    assert client._client.is_closed is True
+
+
+@respx.mock
+def test_with_block_preserves_subclass_type_for_endpoint_methods() -> None:
+    # Regression test: __enter__ used to be annotated to return
+    # HighlightlyBaseClient outright, which meant `with NFLClient(...) as c:
+    # c.get_teams()` failed mypy -- `c` had no endpoint methods as far as
+    # the type checker was concerned, even though it obviously does at
+    # runtime. The real value of this test is being type-checked by mypy
+    # (tests/ is included under strict mode -- see pyproject.toml's `files`
+    # setting): if __enter__'s return type ever regresses to the base
+    # class, the `c.get_teams()` call below stops type-checking and
+    # `uv run mypy .` fails, even though the runtime assertions here would
+    # still pass regardless.
+    respx.get(f"{NFL_BASE_URL}/teams").mock(return_value=httpx.Response(200, json=[]))
+
+    with NFLClient(api_key="test-key") as c:
+        teams = c.get_teams()
+        assert c._client.is_closed is False
+
+    assert teams == []
+    assert c._client.is_closed is True
