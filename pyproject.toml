@@ -40,14 +40,6 @@ dependencies = [
 Homepage = "https://github.com/cjkardokus/pyhighlightly"
 Repository = "https://github.com/cjkardokus/pyhighlightly"
 
-[project.optional-dependencies]
-dev = [
-    "ruff",
-    "mypy",
-    "pytest",
-    "respx",
-]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/pyhighlightly"]
 

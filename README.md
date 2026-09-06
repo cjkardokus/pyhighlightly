@@ -200,7 +200,7 @@ and [hatchling](https://hatch.pypa.io/) as the build backend. See
 quick version:
 
 ```bash
-uv sync --all-extras --dev
+uv sync
 
 uv run ruff check .
 uv run ruff format --check .
