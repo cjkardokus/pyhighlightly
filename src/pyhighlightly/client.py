@@ -428,6 +428,13 @@ class HighlightlyBaseClient:
         and a given page is already cached, that call to ``fetch_fn`` costs
         nothing against your quota even though it still counts toward
         ``max_requests`` here.
+
+        Any ``ValueError`` ``fetch_fn`` itself raises propagates unchanged:
+        e.g. ``client.paginate(client.get_matches)`` with no qualifying
+        keyword arguments raises the same "requires at least one primary
+        filter" error ``client.get_matches()`` would raise called directly
+        (see ``_require_at_least_one``), since this only ever forwards to
+        ``fetch_fn`` and does nothing to shield callers from it.
         """
         offset = kwargs.pop("offset", 0)
         requests_made = 0
