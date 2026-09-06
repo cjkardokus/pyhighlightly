@@ -16,6 +16,7 @@ from typing import Any, ClassVar
 import httpx
 
 from pyhighlightly.client import HighlightlyBaseClient
+from pyhighlightly.exceptions import HighlightlyNotFoundError, HighlightlyResponseError
 from pyhighlightly.models.american_football import (
     BoxScoreResult,
     Highlight,
@@ -52,6 +53,32 @@ def _format_from_date(from_date: str | date) -> str:
     except ValueError as exc:
         raise ValueError(f"from_date must be in 'YYYY-MM-DD' format, got {from_date!r}") from exc
     return from_date
+
+
+def _first_or_not_found(response: httpx.Response, *, resource: str, resource_id: int) -> Any:
+    """Return the first element of a single-resource array response.
+
+    Several endpoints (``/teams/{id}``, ``/matches/{id}``, ``/players/{id}``,
+    ...) wrap a single resource in a one-element array; an empty array is
+    the API's way of saying that id doesn't exist -- confirmed against a
+    live response, not documented behavior, but consistent across every
+    one of these endpoints. Raises ``HighlightlyNotFoundError`` rather than
+    letting an empty array reach a bare ``[0]`` index (which would raise a
+    generic ``IndexError`` instead).
+
+    ``resource`` is a short human-readable name (e.g. ``"team"``) used only
+    in the error message; ``resource_id`` becomes the exception's
+    ``resource_id`` attribute.
+    """
+    items = response.json()
+    if not items:
+        raise HighlightlyNotFoundError(
+            f"No {resource} found with id={resource_id}",
+            url=str(response.request.url),
+            response_body=response.text,
+            resource_id=resource_id,
+        )
+    return items[0]
 
 
 class AmericanFootballClient(HighlightlyBaseClient):
@@ -158,6 +185,8 @@ class AmericanFootballClient(HighlightlyBaseClient):
     def get_team(self, team_id: int, force_refresh: bool = False) -> Team:
         """Fetch a single team by id.
 
+        Raises ``HighlightlyNotFoundError`` if ``team_id`` doesn't exist.
+
         Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
         """
@@ -166,7 +195,9 @@ class AmericanFootballClient(HighlightlyBaseClient):
             "GET",
             f"/teams/{team_id}",
             {},
-            lambda response: Team.model_validate(response.json()[0]),
+            lambda response: Team.model_validate(
+                _first_or_not_found(response, resource="team", resource_id=team_id)
+            ),
             force_refresh=force_refresh,
         )
 
@@ -188,6 +219,8 @@ class AmericanFootballClient(HighlightlyBaseClient):
         string not already in that format raises ``ValueError`` rather than
         being sent to the API as-is.
 
+        Raises ``HighlightlyNotFoundError`` if ``team_id`` doesn't exist.
+
         Cached for 30 minutes by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
         """
@@ -199,7 +232,9 @@ class AmericanFootballClient(HighlightlyBaseClient):
             "GET",
             f"/teams/statistics/{team_id}",
             params,
-            lambda response: TeamStatistics.model_validate(response.json()[0]),
+            lambda response: TeamStatistics.model_validate(
+                _first_or_not_found(response, resource="team", resource_id=team_id)
+            ),
             force_refresh=force_refresh,
         )
 
@@ -275,6 +310,8 @@ class AmericanFootballClient(HighlightlyBaseClient):
         """Fetch full detail for a single match, including venue, weather,
         per-team statistics, injuries, play-by-play events, and predictions.
 
+        Raises ``HighlightlyNotFoundError`` if ``match_id`` doesn't exist.
+
         Never cached (see ``DEFAULT_CACHE_TTLS``): a match in progress
         changes at least as fast as the matches list itself.
         """
@@ -283,7 +320,9 @@ class AmericanFootballClient(HighlightlyBaseClient):
             "GET",
             f"/matches/{match_id}",
             {},
-            lambda response: MatchDetail.model_validate(response.json()[0]),
+            lambda response: MatchDetail.model_validate(
+                _first_or_not_found(response, resource="match", resource_id=match_id)
+            ),
             force_refresh=force_refresh,
         )
 
@@ -357,12 +396,34 @@ class AmericanFootballClient(HighlightlyBaseClient):
         ``BoxScoreResult``'s docstring); this unwraps both into the named
         ``.home``/``.away`` result rather than exposing that raw shape.
 
+        Raises ``HighlightlyNotFoundError`` if ``match_id``'s box score
+        hasn't been published at all (an empty array), or
+        ``HighlightlyResponseError`` if the array has any length other than
+        the expected 2 -- e.g. exactly one team's box score being available
+        (a realistic partial-data case, distinct from "not found": some
+        data exists, just not the complete pair this method promises).
+
         Never cached (see ``DEFAULT_CACHE_TTLS``): docs say box scores
         refresh "every minute."
         """
 
         def parse(response: httpx.Response) -> BoxScoreResult:
-            home_raw, away_raw = response.json()
+            items = response.json()
+            if not items:
+                raise HighlightlyNotFoundError(
+                    f"No box score found for match_id={match_id}",
+                    url=str(response.request.url),
+                    response_body=response.text,
+                    resource_id=match_id,
+                )
+            if len(items) != 2:
+                raise HighlightlyResponseError(
+                    "Expected 2 elements (home and away) in box score "
+                    f"response for match_id={match_id}, got {len(items)}",
+                    url=str(response.request.url),
+                    response_body=response.text,
+                )
+            home_raw, away_raw = items
             return BoxScoreResult(
                 home=TeamBoxScore.model_validate(home_raw["team"]),
                 away=TeamBoxScore.model_validate(away_raw["team"]),
@@ -441,6 +502,8 @@ class AmericanFootballClient(HighlightlyBaseClient):
     def get_player(self, player_id: int, force_refresh: bool = False) -> PlayerSummary:
         """Fetch a single player's profile by id.
 
+        Raises ``HighlightlyNotFoundError`` if ``player_id`` doesn't exist.
+
         Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
         """
@@ -449,7 +512,9 @@ class AmericanFootballClient(HighlightlyBaseClient):
             "GET",
             f"/players/{player_id}",
             {},
-            lambda response: PlayerSummary.model_validate(response.json()[0]),
+            lambda response: PlayerSummary.model_validate(
+                _first_or_not_found(response, resource="player", resource_id=player_id)
+            ),
             force_refresh=force_refresh,
         )
 
@@ -457,6 +522,8 @@ class AmericanFootballClient(HighlightlyBaseClient):
         self, player_id: int, force_refresh: bool = False
     ) -> PlayerStatistics:
         """Fetch a single player's season-by-season statistics by id.
+
+        Raises ``HighlightlyNotFoundError`` if ``player_id`` doesn't exist.
 
         Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
@@ -466,7 +533,9 @@ class AmericanFootballClient(HighlightlyBaseClient):
             "GET",
             f"/players/{player_id}/statistics",
             {},
-            lambda response: PlayerStatistics.model_validate(response.json()[0]),
+            lambda response: PlayerStatistics.model_validate(
+                _first_or_not_found(response, resource="player", resource_id=player_id)
+            ),
             force_refresh=force_refresh,
         )
 
@@ -569,6 +638,8 @@ class AmericanFootballClient(HighlightlyBaseClient):
     def get_highlight(self, highlight_id: int, force_refresh: bool = False) -> Highlight:
         """Fetch a single highlight clip by id.
 
+        Raises ``HighlightlyNotFoundError`` if ``highlight_id`` doesn't exist.
+
         Not in ``DEFAULT_CACHE_TTLS`` (uncached): a single highlight's own
         metadata is static once published, but there's no documented
         refresh cadence for this specific lookup and it's cheap/rare enough
@@ -579,6 +650,8 @@ class AmericanFootballClient(HighlightlyBaseClient):
             "GET",
             f"/highlights/{highlight_id}",
             {},
-            lambda response: Highlight.model_validate(response.json()[0]),
+            lambda response: Highlight.model_validate(
+                _first_or_not_found(response, resource="highlight", resource_id=highlight_id)
+            ),
             force_refresh=force_refresh,
         )

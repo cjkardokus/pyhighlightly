@@ -9,6 +9,7 @@ import pytest
 import respx
 
 from pyhighlightly.american_football import AmericanFootballClient
+from pyhighlightly.exceptions import HighlightlyNotFoundError, HighlightlyResponseError
 from pyhighlightly.models.american_football import (
     BoxScoreStatistic,
     Highlight,
@@ -235,6 +236,18 @@ def test_get_team_returns_single_team() -> None:
     assert team.id == 1
 
 
+@respx.mock
+def test_get_team_raises_not_found_for_empty_array() -> None:
+    respx.get(f"{BASE_URL}/teams/999").mock(return_value=httpx.Response(200, json=[]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(HighlightlyNotFoundError) as exc_info:
+        client.get_team(999)
+
+    assert exc_info.value.resource_id == 999
+    assert exc_info.value.url == f"{BASE_URL}/teams/999"
+
+
 # -- get_team_statistics --
 
 
@@ -262,6 +275,17 @@ def test_get_team_statistics_accepts_valid_date_string() -> None:
     client.get_team_statistics(1, from_date="2024-03-05")
 
     assert route.calls.last.request.url.params["fromDate"] == "2024-03-05"
+
+
+@respx.mock
+def test_get_team_statistics_raises_not_found_for_empty_array() -> None:
+    respx.get(f"{BASE_URL}/teams/statistics/999").mock(return_value=httpx.Response(200, json=[]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(HighlightlyNotFoundError) as exc_info:
+        client.get_team_statistics(999, from_date="2024-03-05")
+
+    assert exc_info.value.resource_id == 999
 
 
 def test_get_team_statistics_rejects_malformed_date_string() -> None:
@@ -343,6 +367,18 @@ def test_get_match_returns_match_detail_with_nested_fields() -> None:
     assert match.events[0].result == "Punt"
     assert match.predictions is not None
     assert match.predictions.prematch[0].probabilities.away == "69.78%"
+
+
+@respx.mock
+def test_get_match_raises_not_found_for_empty_array() -> None:
+    respx.get(f"{BASE_URL}/matches/999").mock(return_value=httpx.Response(200, json=[]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(HighlightlyNotFoundError) as exc_info:
+        client.get_match(999)
+
+    assert exc_info.value.resource_id == 999
+    assert exc_info.value.url == f"{BASE_URL}/matches/999"
 
 
 _STANDINGS_GROUP = {
@@ -519,6 +555,36 @@ def test_get_box_score_maps_raw_array_to_home_and_away_in_order() -> None:
     assert result.away.boxScores[0].player.jersey is None
 
 
+@respx.mock
+def test_get_box_score_raises_not_found_for_empty_array() -> None:
+    # Not "one team's box score is missing" (that's the 1-element case
+    # below) -- an empty array means nothing has been published at all.
+    respx.get(f"{BASE_URL}/box-score/999").mock(return_value=httpx.Response(200, json=[]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(HighlightlyNotFoundError) as exc_info:
+        client.get_box_score(999)
+
+    assert exc_info.value.resource_id == 999
+    assert exc_info.value.url == f"{BASE_URL}/box-score/999"
+
+
+@respx.mock
+def test_get_box_score_raises_response_error_for_one_element() -> None:
+    # A realistic partial-data case: one team's box score is available,
+    # the other isn't yet. Distinct from "not found" (see the empty-array
+    # test above) -- something exists, just not the complete pair this
+    # method promises -- so this is HighlightlyResponseError, not
+    # HighlightlyNotFoundError.
+    respx.get(f"{BASE_URL}/box-score/1").mock(
+        return_value=httpx.Response(200, json=[_BOX_SCORE_RAW[0]])
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(HighlightlyResponseError, match="got 1"):
+        client.get_box_score(1)
+
+
 @pytest.mark.parametrize("value", [7, 10.5, "150", None])
 def test_box_score_statistic_value_accepts_loosely_typed_values(
     value: int | float | str | None,
@@ -582,8 +648,14 @@ def test_get_head_to_head_sends_both_team_id_params() -> None:
 def test_get_matches_rejects_only_secondary_params() -> None:
     client = AmericanFootballClient(api_key="test-key")
 
-    with pytest.raises(ValueError, match="get_matches"):
+    with pytest.raises(ValueError, match="get_matches") as exc_info:
         client.get_matches(limit=10, offset=0)
+
+    # The actual params passed are in the message too, so a caller several
+    # stack frames away from this call doesn't have to reproduce it to see
+    # what was (and wasn't) provided.
+    assert "'limit': 10" in str(exc_info.value)
+    assert "'offset': 0" in str(exc_info.value)
 
 
 @respx.mock
@@ -601,8 +673,11 @@ def test_get_matches_succeeds_with_a_primary_filter() -> None:
 def test_get_highlights_rejects_only_secondary_params() -> None:
     client = AmericanFootballClient(api_key="test-key")
 
-    with pytest.raises(ValueError, match="get_highlights"):
+    with pytest.raises(ValueError, match="get_highlights") as exc_info:
         client.get_highlights(limit=10, offset=0)
+
+    assert "'limit': 10" in str(exc_info.value)
+    assert "'offset': 0" in str(exc_info.value)
 
 
 def test_get_highlights_default_league_counts_as_a_primary_filter() -> None:
@@ -683,6 +758,18 @@ def test_get_highlight_returns_single_highlight_instance() -> None:
     assert highlight.match.id == 569261
 
 
+@respx.mock
+def test_get_highlight_raises_not_found_for_empty_array() -> None:
+    respx.get(f"{BASE_URL}/highlights/999").mock(return_value=httpx.Response(200, json=[]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(HighlightlyNotFoundError) as exc_info:
+        client.get_highlight(999)
+
+    assert exc_info.value.resource_id == 999
+    assert exc_info.value.url == f"{BASE_URL}/highlights/999"
+
+
 def test_highlight_category_parses_known_value() -> None:
     highlight = Highlight.model_validate(_HIGHLIGHT)
     assert highlight.category is HighlightCategory.PRE_MATCH_CONTENT
@@ -751,6 +838,18 @@ def test_get_player_returns_player_summary_with_profile() -> None:
 
 
 @respx.mock
+def test_get_player_raises_not_found_for_empty_array() -> None:
+    respx.get(f"{BASE_URL}/players/999").mock(return_value=httpx.Response(200, json=[]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(HighlightlyNotFoundError) as exc_info:
+        client.get_player(999)
+
+    assert exc_info.value.resource_id == 999
+    assert exc_info.value.url == f"{BASE_URL}/players/999"
+
+
+@respx.mock
 def test_get_player_statistics_returns_per_season_stats() -> None:
     respx.get(f"{BASE_URL}/players/36017/statistics").mock(
         return_value=httpx.Response(200, json=[_PLAYER_STATISTICS])
@@ -767,3 +866,15 @@ def test_get_player_statistics_returns_per_season_stats() -> None:
     assert values_by_name["Total Games Played"] == 17
     assert values_by_name["Win Percentage"] == "0.647"
     assert values_by_name["Some Unreported Stat"] is None
+
+
+@respx.mock
+def test_get_player_statistics_raises_not_found_for_empty_array() -> None:
+    respx.get(f"{BASE_URL}/players/999/statistics").mock(return_value=httpx.Response(200, json=[]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(HighlightlyNotFoundError) as exc_info:
+        client.get_player_statistics(999)
+
+    assert exc_info.value.resource_id == 999
+    assert exc_info.value.url == f"{BASE_URL}/players/999/statistics"

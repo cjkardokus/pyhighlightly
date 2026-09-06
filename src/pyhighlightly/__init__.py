@@ -17,6 +17,7 @@ from pyhighlightly.exceptions import (
     HighlightlyError,
     HighlightlyNotFoundError,
     HighlightlyRateLimitError,
+    HighlightlyResponseError,
 )
 from pyhighlightly.nfl import NFLClient
 
@@ -28,5 +29,6 @@ __all__ = [
     "HighlightlyError",
     "HighlightlyNotFoundError",
     "HighlightlyRateLimitError",
+    "HighlightlyResponseError",
     "NFLClient",
 ]

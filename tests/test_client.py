@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 import respx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from pyhighlightly.client import HighlightlyBaseClient
 from pyhighlightly.exceptions import (
+    _RESPONSE_BODY_TRUNCATE_AT,
     HighlightlyAPIError,
     HighlightlyAuthError,
     HighlightlyNotFoundError,
     HighlightlyRateLimitError,
+    HighlightlyResponseError,
 )
 from pyhighlightly.models.common import PaginatedResponse, Pagination, Plan
 from pyhighlightly.nfl import NFLClient
@@ -64,6 +67,8 @@ def test_401_raises_auth_error() -> None:
         client._request("GET", "/teams")
 
     assert exc_info.value.status_code == 401
+    assert exc_info.value.url == f"{BASE_URL}/teams"
+    assert exc_info.value.response_body == '{"message":"invalid key"}'
 
 
 @respx.mock
@@ -77,6 +82,8 @@ def test_403_raises_auth_error() -> None:
         client._request("GET", "/teams")
 
     assert exc_info.value.status_code == 403
+    assert exc_info.value.url == f"{BASE_URL}/teams"
+    assert exc_info.value.response_body == '{"message":"forbidden"}'
 
 
 @respx.mock
@@ -86,8 +93,16 @@ def test_404_raises_not_found_error() -> None:
     )
     client = make_client()
 
-    with pytest.raises(HighlightlyNotFoundError):
+    with pytest.raises(HighlightlyNotFoundError) as exc_info:
         client._request("GET", "/teams/1")
+
+    # status_code defaults to 404 on the exception, but raise_for_response
+    # should still pass it explicitly for this, its one real trigger --
+    # this is the same value either way, so this pins the call site, not
+    # just the default.
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.url == f"{BASE_URL}/teams/1"
+    assert exc_info.value.response_body == '{"message":"missing"}'
 
 
 @respx.mock
@@ -110,6 +125,13 @@ def test_429_raises_rate_limit_error_with_remaining_zero() -> None:
 
     assert exc_info.value.requests_remaining == 0
     assert exc_info.value.retry_after == 30
+    # A real 429 response, not local preemption: status_code is the actual
+    # status, preempted is False, and retry_at (preemption-only) is unset.
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.url == f"{BASE_URL}/teams"
+    assert exc_info.value.response_body == '{"message":"slow down"}'
+    assert exc_info.value.preempted is False
+    assert exc_info.value.retry_at is None
 
 
 @respx.mock
@@ -122,6 +144,90 @@ def test_generic_500_raises_api_error_with_status_and_body() -> None:
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.response_body == "internal error"
+    assert exc_info.value.url == f"{BASE_URL}/teams"
+
+
+@respx.mock
+def test_long_response_body_is_truncated_with_elision_marker() -> None:
+    huge_body = "x" * (_RESPONSE_BODY_TRUNCATE_AT + 500)
+    respx.get(f"{BASE_URL}/teams").mock(return_value=httpx.Response(500, text=huge_body))
+    client = make_client()
+
+    with pytest.raises(HighlightlyAPIError) as exc_info:
+        client._request("GET", "/teams")
+
+    body = exc_info.value.response_body
+    assert body is not None
+    assert len(body) < len(huge_body)
+    assert body.startswith("x" * _RESPONSE_BODY_TRUNCATE_AT)
+    assert body.endswith(f"...[truncated, {len(huge_body)} bytes total]")
+
+
+# -- _parse_response: schema drift / non-JSON responses --
+
+
+class _StrictItem(BaseModel):
+    id: int
+    name: str
+
+
+@respx.mock
+def test_schema_drift_raises_response_error_with_validation_error_chained() -> None:
+    # "name" is required but missing -- a realistic API schema-drift case.
+    respx.get(f"{BASE_URL}/teams").mock(return_value=httpx.Response(200, json={"id": 1}))
+    client = make_client()
+
+    with pytest.raises(HighlightlyResponseError) as exc_info:
+        client._cached_request(
+            "get_thing",
+            "GET",
+            "/teams",
+            {},
+            lambda response: _StrictItem.model_validate(response.json()),
+        )
+
+    assert exc_info.value.status_code == 200
+    assert exc_info.value.url == f"{BASE_URL}/teams"
+    assert isinstance(exc_info.value.__cause__, ValidationError)
+
+
+@respx.mock
+def test_non_json_200_raises_response_error_with_json_decode_error_chained() -> None:
+    # A 200 with a non-JSON body -- e.g. an HTML maintenance page served
+    # without the API actually returning an error status.
+    respx.get(f"{BASE_URL}/teams").mock(
+        return_value=httpx.Response(200, text="<html>maintenance</html>")
+    )
+    client = make_client()
+
+    with pytest.raises(HighlightlyResponseError) as exc_info:
+        client._cached_request(
+            "get_thing",
+            "GET",
+            "/teams",
+            {},
+            lambda response: response.json(),
+        )
+
+    assert exc_info.value.status_code == 200
+    assert exc_info.value.url == f"{BASE_URL}/teams"
+    assert exc_info.value.response_body == "<html>maintenance</html>"
+    assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+
+
+@respx.mock
+def test_highlightly_error_raised_by_parse_is_not_wrapped() -> None:
+    # A HighlightlyError parse() raises on purpose (e.g. the empty-array
+    # guards in AmericanFootballClient) should pass through _parse_response
+    # unchanged, not get reclassified as a HighlightlyResponseError.
+    respx.get(f"{BASE_URL}/teams").mock(return_value=httpx.Response(200, json=[]))
+    client = make_client()
+
+    def parse(response: httpx.Response) -> None:
+        raise HighlightlyNotFoundError("deliberately raised by parse()")
+
+    with pytest.raises(HighlightlyNotFoundError, match="deliberately raised by parse"):
+        client._cached_request("get_thing", "GET", "/teams", {}, parse)
 
 
 @respx.mock
@@ -165,6 +271,8 @@ def test_zero_remaining_preempts_further_requests_locally() -> None:
         )
     )
     client = make_client()
+    t0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    client._now = lambda: t0  # type: ignore[method-assign]
 
     client._request("GET", "/teams")
     assert client.requests_remaining == 0
@@ -173,6 +281,29 @@ def test_zero_remaining_preempts_further_requests_locally() -> None:
         client._request("GET", "/teams")
 
     assert exc_info.value.requests_remaining == 0
+    # Preempted locally, not a real response: no status code (no request
+    # was sent), preempted is True, url still says which call was blocked,
+    # and retry_at is exactly the 24-hour resync window from the zero
+    # that's actually being enforced -- see _preemption_retry_at.
+    assert exc_info.value.status_code is None
+    assert exc_info.value.preempted is True
+    assert exc_info.value.url == f"{BASE_URL}/teams"
+    assert exc_info.value.retry_at == t0 + timedelta(hours=24)
+
+
+def test_preemption_with_no_recorded_zero_observation_has_no_retry_at() -> None:
+    # The defensive edge case noted on _should_preempt_for_rate_limit: a
+    # zero with no observation timestamp at all shouldn't normally happen,
+    # but if it does, there's nothing to compute a resync time from.
+    client = make_client()
+    client._requests_remaining = 0
+    assert client._zero_observed_at is None
+
+    with pytest.raises(HighlightlyRateLimitError) as exc_info:
+        client._request("GET", "/teams")
+
+    assert exc_info.value.preempted is True
+    assert exc_info.value.retry_at is None
 
 
 # -- Stale-zero re-sync (no reset-time header is available from Highlightly;
