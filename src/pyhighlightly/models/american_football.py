@@ -43,7 +43,15 @@ class Team(BaseModel):
     """A team, as returned by ``/teams`` and nested in match responses."""
 
     id: int
-    logo: str
+    #: Confirmed live to sometimes be ``null``, not just always a URL:
+    #: checked against real matches on 2026-09-05 and found 5 of 100 had
+    #: an explicit ``null`` logo, specifically for smaller-program teams
+    #: (e.g. Texas Wesleyan, Midwestern State) rather than every team
+    #: having one on file. 5% on a single day's data is a realistic rate,
+    #: not a rare edge case -- a required ``str`` here meant
+    #: ``get_matches()`` crashed outright on any date range that happened
+    #: to include one of these matches.
+    logo: str | None = None
     name: str
     displayName: str
     abbreviation: str
