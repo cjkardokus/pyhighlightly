@@ -376,13 +376,17 @@ class HighlightlyBaseClient:
         primitive with no sport-specific knowledge, so it lives here rather
         than on ``AmericanFootballClient``. ``endpoint_name`` is used only in
         the error message, to point the caller at which call failed and why.
+        The message also includes ``params`` itself, so a caller several
+        stack frames away from the original call (this is often reached
+        through a wrapper) can see exactly what was -- and wasn't --
+        provided without needing to reproduce the call.
         """
         if not set(params) - secondary_keys:
             raise ValueError(
                 f"{endpoint_name}() requires at least one primary filter argument "
                 f"beyond {sorted(secondary_keys)}; Highlightly's API documents "
                 "this endpoint as rejecting a call with none of these with an "
-                "HTTP 400."
+                f"HTTP 400. Params passed: {params!r}."
             )
 
     def paginate(
