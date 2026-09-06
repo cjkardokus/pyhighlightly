@@ -1059,6 +1059,26 @@ def test_get_players_omits_name_filter_when_not_given() -> None:
 
 
 @respx.mock
+def test_get_players_never_sends_a_league_param_even_via_nfl_client() -> None:
+    # Deliberate, not a gap -- see get_players' docstring. /players has no
+    # league-scoping parameter at all; confirmed live, a league=NFL query
+    # is rejected outright with HTTP 400 ("property league should not
+    # exist"), not silently ignored. This pins that NFLClient's
+    # default_league is correctly never applied here, so a future change
+    # that reflexively adds _with_default(..., "league", ...) -- matching
+    # every other list endpoint -- doesn't silently reintroduce a call the
+    # live API is confirmed to reject.
+    route = respx.get(f"{BASE_URL}/players").mock(
+        return_value=httpx.Response(200, json=_paginated([_PLAYER]))
+    )
+    client = NFLClient(api_key="test-key")
+
+    client.get_players()
+
+    assert "league" not in route.calls.last.request.url.params
+
+
+@respx.mock
 def test_get_players_default_limit_is_1000() -> None:
     # Distinct from get_matches' limit=100 and get_highlights' limit=40
     # defaults -- confirm this endpoint's own default specifically, not

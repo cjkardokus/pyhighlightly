@@ -498,6 +498,27 @@ class AmericanFootballClient(HighlightlyBaseClient):
         zero-filter call per its docs -- no primary-parameter requirement
         applies here, so no client-side validation is added.
 
+        **Unlike every other list endpoint on this client
+        (``get_teams``, ``get_matches``, ``get_standings``,
+        ``get_highlights``), results here are never scoped to a league --
+        not even when called via ``NFLClient``.** This is deliberate, not
+        an oversight: ``/players`` genuinely has no league-scoping
+        parameter to apply ``default_league`` to. Confirmed two ways --
+        Highlightly's own documentation lists exactly three query
+        parameters for this endpoint (``name``, ``limit``, ``offset``, no
+        ``league``/``leagueName``/``leagueType`` among them), and a live
+        request adding ``league=NFL`` anyway was rejected outright with
+        HTTP 400 (``{"message": "property league should not exist"}``) --
+        this isn't a case of the API silently ignoring an unrecognized
+        param, it's actively rejected. So ``NFLClient().get_players()``
+        returns players from every league on the American Football host,
+        NCAA included, and there is currently no way to ask this endpoint
+        for NFL-only players. If that matters for your use case, filter
+        the returned ``Player`` objects client-side (there's no per-player
+        league field to filter on in this endpoint's response shape
+        either, so that would have to come from cross-referencing against
+        ``get_teams()`` or similar).
+
         Cached for 6 hours by default (see ``DEFAULT_CACHE_TTLS``); pass
         ``force_refresh=True`` to bypass a cached result for this call.
         """
