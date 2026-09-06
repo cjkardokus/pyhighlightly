@@ -5,12 +5,19 @@ build-backend = "hatchling.build"
 [project]
 name = "pyhighlightly"
 version = "0.1.0"
-description = "A typed Python client for Highlightly's NFL API (free-tier endpoint coverage)"
+description = "A typed Python client for Highlightly's NFL API, covering the free-tier endpoint surface"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Connor" },
+    { name = "Connor", email = "cjkardokus@gmail.com" },
+]
+keywords = [
+    "nfl",
+    "american-football",
+    "sports-api",
+    "sports-data",
+    "highlightly",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

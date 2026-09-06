@@ -64,6 +64,7 @@ class InMemoryCache(CacheBackend):
         self._entries: dict[str, tuple[Any, datetime]] = {}
 
     def get(self, key: str) -> Any | None:
+        """See ``CacheBackend.get``."""
         entry = self._entries.get(key)
         if entry is None:
             return None
@@ -74,7 +75,9 @@ class InMemoryCache(CacheBackend):
         return value
 
     def set(self, key: str, value: Any, ttl_seconds: int) -> None:
+        """See ``CacheBackend.set``."""
         self._entries[key] = (value, self._now() + timedelta(seconds=ttl_seconds))
 
     def delete(self, key: str) -> None:
+        """See ``CacheBackend.delete``."""
         self._entries.pop(key, None)
