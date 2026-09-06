@@ -64,7 +64,7 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/smoke-env" dist/*.whl mypy
 
       - name: Confirm the built wheel is importable from a clean install
-        run: "$RUNNER_TEMP/smoke-env/bin/python" -c "import pyhighlightly"
+        run: $RUNNER_TEMP/smoke-env/bin/python -c "import pyhighlightly"
 
       - name: Confirm type information ships with the wheel
         # Copies the checked-in throwaway script (see its own docstring) to
