@@ -9,22 +9,10 @@ and an [httpx](https://www.python-httpx.org/)-based client, so you can query
 games, teams, players, and standings without hand-rolling request/response
 parsing.
 
-> **Status:** early scaffold. No client logic is implemented yet — see
-> [Scope](#scope) and the project roadmap for what's coming.
-
-## Installation
-
-Once published to PyPI:
-
-```bash
-pip install pyhighlightly
-```
-
-or, with [uv](https://docs.astral.sh/uv/):
-
-```bash
-uv add pyhighlightly
-```
+> **Status:** pre-1.0 and under active development. Every free-tier NFL
+> endpoint is implemented — teams, matches, standings, lineups, box scores,
+> players, and highlights — with built-in rate-limit handling and response
+> caching. Not yet published to PyPI; see [Installation](#installation).
 
 ## Scope
 
@@ -33,6 +21,73 @@ endpoints. Odds, bookmakers, and geo-restricted endpoints are intentionally
 **out of scope**, since Highlightly's Basic/Free plan does not have access to
 them. If you're on a paid Highlightly plan and need those endpoints, this
 library is not (currently) the right fit.
+
+## Installation
+
+Not yet published to PyPI. Install directly from GitHub:
+
+```bash
+pip install git+https://github.com/cjkardokus/pyhighlightly.git
+```
+
+or, with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add git+https://github.com/cjkardokus/pyhighlightly.git
+```
+
+PyPI publishing is planned but hasn't happened yet.
+
+## Quickstart
+
+```python
+from pyhighlightly import NFLClient
+
+client = NFLClient(api_key="YOUR_HIGHLIGHTLY_API_KEY")
+
+teams = client.get_teams()
+print(f"{len(teams)} NFL teams")
+print(teams[0].displayName)
+
+matches = client.get_matches(season=2024, limit=5)
+for match in matches.data:
+    print(match.date, match.awayTeam.displayName, "@", match.homeTeam.displayName)
+```
+
+`api_key` works with a key from either Highlightly's own platform or its
+RapidAPI listing — see [Rate Limiting](#rate-limiting) below for how the two
+differ. Every endpoint method returns typed pydantic models (or a
+`PaginatedResponse` wrapping them), so your editor/type-checker knows the
+shape of the response without you having to look it up.
+
+## Extending this client
+
+This client's class hierarchy is deliberately built to extend beyond the NFL:
+
+- **`HighlightlyBaseClient`** (`client.py`) is fully generic and
+  sport-agnostic — it knows nothing about American football specifically.
+  It owns auth, rate-limit tracking, caching, and pagination, and is the
+  base a client for any other Highlightly sport (basketball, soccer,
+  hockey, ...) would extend.
+- **`AmericanFootballClient`** (`american_football.py`) extends it with
+  every American Football endpoint (teams, matches, standings, lineups, box
+  scores, players, highlights) plus a `default_league` hook that
+  league-specific subclasses set.
+- **`NFLClient`** extends `AmericanFootballClient` and does nothing but set
+  `default_league = "NFL"` — intentionally thin, as the template for what an
+  `NCAAClient` would look like (not implemented yet, since this client's
+  [current scope](#scope) is NFL-only).
+
+A future NCAA client, for instance, would be as small as:
+
+```python
+class NCAAClient(AmericanFootballClient):
+    default_league = "NCAA"
+```
+
+A client for a different sport entirely would subclass `HighlightlyBaseClient`
+directly and implement its own endpoint methods, following the same shape as
+`AmericanFootballClient`.
 
 ## Rate Limiting
 
@@ -81,9 +136,6 @@ is **never** cached, so you always see the current state of an in-progress
 game.
 
 ```python
-from pyhighlightly import NFLClient
-
-client = NFLClient(api_key="...")
 client.get_teams()  # network call
 client.get_teams()  # served from cache, no network call
 
@@ -143,7 +195,9 @@ client = NFLClient(api_key="...", enable_cache=False)
 ## Development
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management
-and [hatchling](https://hatch.pypa.io/) as the build backend.
+and [hatchling](https://hatch.pypa.io/) as the build backend. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor workflow;
+quick version:
 
 ```bash
 uv sync --all-extras --dev

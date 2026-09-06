@@ -212,6 +212,16 @@ class HighlightlyBaseClient:
         cache_ttls: dict[str, int] | None = None,
         enable_cache: bool = True,
     ) -> None:
+        """Construct a client.
+
+        ``api_key`` is required. ``base_url`` overrides a subclass's
+        default (and is required if ``HighlightlyBaseClient`` is
+        instantiated directly, since it has none). ``cache`` defaults to a
+        fresh ``InMemoryCache`` if not given; ``cache_ttls`` overrides
+        specific endpoints' TTLs (merged over ``DEFAULT_CACHE_TTLS``); and
+        ``enable_cache`` is a global on/off switch -- see the "Caching"
+        note above for how these three interact.
+        """
         if not api_key:
             raise ValueError("api_key is required")
 
@@ -354,6 +364,15 @@ class HighlightlyBaseClient:
         yielded in total, or once ``max_requests`` pages have been fetched,
         whichever comes first -- pass ``max_requests`` to put a hard
         ceiling on how much of your quota one call can spend.
+
+        Note on caching: ``max_requests`` counts calls to ``fetch_fn``, not
+        necessarily live network requests. If ``fetch_fn`` is a cached
+        endpoint (see ``AmericanFootballClient.DEFAULT_CACHE_TTLS`` --
+        ``get_standings`` and ``get_players`` are cached and paginated;
+        ``get_matches``/``get_highlights`` are paginated but never cached)
+        and a given page is already cached, that call to ``fetch_fn`` costs
+        nothing against your quota even though it still counts toward
+        ``max_requests`` here.
         """
         offset = kwargs.pop("offset", 0)
         requests_made = 0
@@ -379,6 +398,7 @@ class HighlightlyBaseClient:
         self._client.close()
 
     def __enter__(self) -> HighlightlyBaseClient:
+        """Support ``with client: ...`` -- returns ``self``."""
         return self
 
     def __exit__(
@@ -387,6 +407,7 @@ class HighlightlyBaseClient:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        """Support ``with client: ...`` -- closes the connection pool on exit."""
         self.close()
 
     def _request(
