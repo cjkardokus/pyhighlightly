@@ -18,7 +18,20 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        # Pinned to an exact release, not a floating major tag: setup-uv
+        # stopped publishing those after v7, so a bare `@v10` doesn't
+        # exist to float on. This project's previous pin, `@v3`, was
+        # frozen at a release old enough to predate the `python-version`
+        # input outright -- that input was silently ignored rather than
+        # erroring, so every job in this matrix actually ran under
+        # whatever Python happened to be preinstalled on the runner,
+        # regardless of `matrix.python-version` (confirmed on real CI
+        # runs: all five jobs reported the same interpreter). Confirmed
+        # against astral-sh/setup-uv's own README that this input (which
+        # sets UV_PYTHON) is still the documented way to pin a version in
+        # a matrix exactly like this one -- see its "Python version"
+        # section.
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -51,7 +64,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        # See the same step's comment in the `test` job above for why this
+        # is pinned to an exact release rather than `@v3`.
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.13"
 
