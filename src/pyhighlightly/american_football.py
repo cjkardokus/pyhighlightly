@@ -150,6 +150,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         display_name: str | None = None,
         abbreviation: str | None = None,
         league: str | None = None,
+        *,
         force_refresh: bool = False,
     ) -> list[Team]:
         """List teams matching the given filters.
@@ -182,7 +183,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
             force_refresh=force_refresh,
         )
 
-    def get_team(self, team_id: int, force_refresh: bool = False) -> Team:
+    def get_team(self, team_id: int, *, force_refresh: bool = False) -> Team:
         """Fetch a single team by id.
 
         Raises ``HighlightlyNotFoundError`` if ``team_id`` doesn't exist.
@@ -206,6 +207,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         team_id: int,
         from_date: str | date,
         timezone: str | None = None,
+        *,
         force_refresh: bool = False,
     ) -> TeamStatistics:
         """Fetch a team's season statistics as of ``from_date``.
@@ -253,6 +255,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         league: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        *,
         force_refresh: bool = False,
     ) -> PaginatedResponse[Match]:
         """Fetch one page of matches matching the given filters.
@@ -316,7 +319,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
             force_refresh=force_refresh,
         )
 
-    def get_match(self, match_id: int, force_refresh: bool = False) -> MatchDetail:
+    def get_match(self, match_id: int, *, force_refresh: bool = False) -> MatchDetail:
         """Fetch full detail for a single match, including venue, weather,
         per-team statistics, injuries, play-by-play events, and predictions.
 
@@ -344,6 +347,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         year: int | None = None,
         limit: int = 10,
         offset: int = 0,
+        *,
         force_refresh: bool = False,
     ) -> PaginatedResponse[Standings]:
         """Fetch standings groups matching the given filters.
@@ -382,7 +386,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
             force_refresh=force_refresh,
         )
 
-    def get_lineups(self, match_id: int, force_refresh: bool = False) -> Lineups:
+    def get_lineups(self, match_id: int, *, force_refresh: bool = False) -> Lineups:
         """Fetch both teams' lineups for a match.
 
         Never cached (see ``DEFAULT_CACHE_TTLS``): per the docs, lineups
@@ -398,7 +402,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
             force_refresh=force_refresh,
         )
 
-    def get_box_score(self, match_id: int, force_refresh: bool = False) -> BoxScoreResult:
+    def get_box_score(self, match_id: int, *, force_refresh: bool = False) -> BoxScoreResult:
         """Fetch both teams' box scores for a match.
 
         The raw API response is an unlabeled ``[homeTeam, awayTeam]`` array
@@ -448,7 +452,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
             force_refresh=force_refresh,
         )
 
-    def get_last_five_games(self, team_id: int, force_refresh: bool = False) -> list[Match]:
+    def get_last_five_games(self, team_id: int, *, force_refresh: bool = False) -> list[Match]:
         """Fetch a team's five most recently completed matches.
 
         Cached for 15 minutes by default (see ``DEFAULT_CACHE_TTLS``); pass
@@ -464,7 +468,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         )
 
     def get_head_to_head(
-        self, team_id_one: int, team_id_two: int, force_refresh: bool = False
+        self, team_id_one: int, team_id_two: int, *, force_refresh: bool = False
     ) -> list[Match]:
         """Fetch the match history between two teams.
 
@@ -485,6 +489,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         name: str | None = None,
         limit: int = 1000,
         offset: int = 0,
+        *,
         force_refresh: bool = False,
     ) -> PaginatedResponse[Player]:
         """List players matching the given filters.
@@ -509,7 +514,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
             force_refresh=force_refresh,
         )
 
-    def get_player(self, player_id: int, force_refresh: bool = False) -> PlayerSummary:
+    def get_player(self, player_id: int, *, force_refresh: bool = False) -> PlayerSummary:
         """Fetch a single player's profile by id.
 
         Raises ``HighlightlyNotFoundError`` if ``player_id`` doesn't exist.
@@ -529,7 +534,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         )
 
     def get_player_statistics(
-        self, player_id: int, force_refresh: bool = False
+        self, player_id: int, *, force_refresh: bool = False
     ) -> PlayerStatistics:
         """Fetch a single player's season-by-season statistics by id.
 
@@ -565,6 +570,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         away_team_display_name: str | None = None,
         limit: int = 40,
         offset: int = 0,
+        *,
         force_refresh: bool = False,
     ) -> PaginatedResponse[Highlight]:
         """Fetch one page of highlight clips matching the given filters.
@@ -655,7 +661,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
             force_refresh=force_refresh,
         )
 
-    def get_highlight(self, highlight_id: int, force_refresh: bool = False) -> Highlight:
+    def get_highlight(self, highlight_id: int, *, force_refresh: bool = False) -> Highlight:
         """Fetch a single highlight clip by id.
 
         Raises ``HighlightlyNotFoundError`` if ``highlight_id`` doesn't exist.

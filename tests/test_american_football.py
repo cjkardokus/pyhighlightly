@@ -248,6 +248,26 @@ def test_get_teams_sends_each_filter_param_correctly(
     assert route.calls.last.request.url.params[query_key] == value
 
 
+# -- force_refresh is keyword-only on every endpoint method --
+
+
+def test_force_refresh_cannot_be_passed_positionally_on_a_single_id_method() -> None:
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(TypeError, match="positional argument"):
+        client.get_team(1, True)  # type: ignore[call-arg]
+
+
+def test_force_refresh_cannot_be_passed_positionally_on_a_two_id_method() -> None:
+    # A second representative shape: two required positional args ahead of
+    # force_refresh, not just one -- confirms the `*,` separator was placed
+    # correctly regardless of how many positional params precede it.
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(TypeError, match="positional argument"):
+        client.get_head_to_head(1, 2, True)  # type: ignore[call-arg]
+
+
 # -- get_team --
 
 
