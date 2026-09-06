@@ -16,8 +16,12 @@ and [hatchling](https://hatch.pypa.io/) as the build backend.
 ```bash
 git clone https://github.com/cjkardokus/pyhighlightly.git
 cd pyhighlightly
-uv sync --all-extras --dev
+uv sync
 ```
+
+`uv sync` installs the project along with its `dev` dependency group
+(`ruff`, `mypy`, `pytest`, `respx` -- see `[dependency-groups]` in
+`pyproject.toml`), which is included by default.
 
 ## Before submitting a PR
 

@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Check out repository
@@ -23,7 +23,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --locked
 
       - name: Ruff check
         run: uv run ruff check .
@@ -36,3 +36,49 @@ jobs:
 
       - name: Pytest
         run: uv run pytest
+
+  build-and-install:
+    # Everything above type-checks and tests against the source tree
+    # (mypy_path = "src" in pyproject.toml resolves imports straight from
+    # `src/`, and pytest imports the editable install). Neither ever proves
+    # the package a real user gets from `pip install` behaves the same way.
+    # This job builds the actual wheel, installs *only* that wheel into a
+    # venv with no knowledge of this repo's source layout or its
+    # pyproject.toml, and checks it from there.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+
+      - name: Build the package
+        run: uv build
+
+      - name: Create a clean install environment
+        run: |
+          uv venv "$RUNNER_TEMP/smoke-env"
+          uv pip install --python "$RUNNER_TEMP/smoke-env" dist/*.whl mypy
+
+      - name: Confirm the built wheel is importable from a clean install
+        run: $RUNNER_TEMP/smoke-env/bin/python -c "import pyhighlightly"
+
+      - name: Confirm type information ships with the wheel
+        # Copies the checked-in throwaway script (see its own docstring) to
+        # a directory outside the checkout before type-checking it, on
+        # purpose: this repo's own pyproject.toml points mypy at `src/`
+        # directly (see the comment above), which would silently mask a
+        # packaging problem here. Run from a directory with no
+        # pyproject.toml of its own, mypy has nothing to resolve the import
+        # against except what the installed wheel actually ships. This is
+        # the check that catches a missing `py.typed` marker -- without one,
+        # every type in the package resolves to `Any` for downstream users
+        # no matter how carefully it's annotated internally.
+        run: |
+          mkdir -p "$RUNNER_TEMP/consumer"
+          cp .github/ci-smoke-test/check_types.py "$RUNNER_TEMP/consumer/"
+          cd "$RUNNER_TEMP/consumer"
+          "$RUNNER_TEMP/smoke-env/bin/mypy" check_types.py

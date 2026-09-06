@@ -560,14 +560,6 @@ dependencies = [
     { name = "pydantic" },
 ]
 
-[package.optional-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "respx" },
-    { name = "ruff" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "mypy" },
@@ -579,13 +571,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "mypy", marker = "extra == 'dev'" },
     { name = "pydantic", specifier = ">=2,<3" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "respx", marker = "extra == 'dev'" },
-    { name = "ruff", marker = "extra == 'dev'" },
 ]
-provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
