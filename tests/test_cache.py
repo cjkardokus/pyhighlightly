@@ -5,6 +5,9 @@ wiring.
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -78,6 +81,45 @@ def test_in_memory_cache_entry_expires_after_ttl() -> None:
 
     now = t0 + timedelta(seconds=61)
     assert cache.get("key") is None
+
+
+def test_in_memory_cache_concurrent_get_on_expired_key_does_not_raise() -> None:
+    # Regression test: get() used to evict an expired entry with a bare
+    # `del self._entries[key]`. When multiple threads all found the same
+    # entry expired at once, only the first `del` succeeded -- every other
+    # thread's `del` raised KeyError, which escaped get() uncaught.
+    #
+    # A plain dict check-then-delete is fast enough that, on its own, real
+    # threads rarely land inside that window together -- so `now_fn` sleeps
+    # for a moment on every call. `time.sleep` releases the GIL, so this
+    # widens the window between "found this entry expired" and "evict it"
+    # enough that many real threads reliably pile up inside it at once,
+    # which is what actually reproduces the race. Asserting on
+    # `future.result()` re-raises any exception a thread hit as a test
+    # failure instead of letting the test pass silently around it.
+    t0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    now = t0
+
+    def now_fn() -> datetime:
+        time.sleep(0.01)
+        return now
+
+    cache = InMemoryCache(now_fn=now_fn)
+    cache.set("key", "value", ttl_seconds=60)
+    now = t0 + timedelta(seconds=61)  # expired for every thread from here on
+
+    thread_count = 32
+    barrier = threading.Barrier(thread_count)
+
+    def call_get() -> object:
+        barrier.wait()  # release all threads into get() at the same instant
+        return cache.get("key")
+
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        futures = [executor.submit(call_get) for _ in range(thread_count)]
+        results = [future.result() for future in futures]
+
+    assert results == [None] * thread_count
 
 
 def test_in_memory_cache_delete_removes_entry() -> None:

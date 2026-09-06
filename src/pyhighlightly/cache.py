@@ -15,6 +15,11 @@ enough for a single long-lived process (a script, a notebook, a single
 Airflow worker). It is not shared across processes and has no size limit --
 a consuming project that needs either of those should supply its own
 ``CacheBackend``.
+
+A client may call into its cache backend from multiple threads at once (a
+long-lived worker process making several concurrent requests, for instance),
+so a backend needs to tolerate that. ``InMemoryCache`` does; a custom backend
+should either do the same or document that it doesn't.
 """
 
 from __future__ import annotations
@@ -53,6 +58,15 @@ class InMemoryCache(CacheBackend):
     No size limit and no LRU eviction -- deliberately simple. Entries are
     only ever removed by expiring (checked lazily, on ``get``) or by an
     explicit ``delete``.
+
+    Safe to call ``get``/``set``/``delete`` on the same instance from
+    multiple threads concurrently: each of those methods does at most one
+    dict read and one dict write, and CPython guarantees a single dict
+    operation is atomic. The one place this class does a check followed by a
+    conditional removal -- ``get`` evicting an entry it finds expired --
+    uses ``dict.pop(key, None)`` rather than ``del``, so two threads that
+    both see the same entry as expired don't race: whichever runs first
+    evicts it, and the other's ``pop`` is a no-op instead of a ``KeyError``.
     """
 
     def __init__(self, now_fn: Callable[[], datetime] | None = None) -> None:
@@ -70,7 +84,7 @@ class InMemoryCache(CacheBackend):
             return None
         value, expires_at = entry
         if self._now() >= expires_at:
-            del self._entries[key]
+            self._entries.pop(key, None)
             return None
         return value
 
