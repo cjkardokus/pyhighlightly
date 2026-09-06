@@ -33,6 +33,12 @@ from pyhighlightly.exceptions import (
 from pyhighlightly.models.common import PaginatedResponse
 
 _T = TypeVar("_T")
+#: Bound to HighlightlyBaseClient so `__enter__` returns the actual subclass
+#: (NFLClient, etc.) instead of widening it to the base class -- see
+#: `__enter__` below. `typing.Self` would be the more direct spelling, but
+#: it's 3.11+ and this project's floor is 3.10 without typing_extensions as
+#: a dependency, so a bound TypeVar is the compatible equivalent.
+_ClientT = TypeVar("_ClientT", bound="HighlightlyBaseClient")
 
 DEFAULT_TIMEOUT = 10.0
 
@@ -233,6 +239,13 @@ class HighlightlyBaseClient:
             )
 
         self._api_key = api_key
+        # `base_url` stays `str | None` at class scope so a subclass can
+        # leave it unset (see the class attribute above); mypy can't narrow
+        # that through an instance assignment, so the definitely-`str` value
+        # confirmed just above is kept separately for internal use.
+        # `self.base_url` is still set too, for backward compatibility with
+        # any external code that reads it.
+        self._resolved_base_url: str = resolved_base_url
         self.base_url = resolved_base_url
         self._timeout = timeout
         self._client = httpx.Client(timeout=timeout)
@@ -397,8 +410,14 @@ class HighlightlyBaseClient:
         """Close the underlying HTTP connection pool."""
         self._client.close()
 
-    def __enter__(self) -> HighlightlyBaseClient:
-        """Support ``with client: ...`` -- returns ``self``."""
+    def __enter__(self: _ClientT) -> _ClientT:
+        """Support ``with client: ...`` -- returns ``self``.
+
+        Typed via a TypeVar bound to this class, not a fixed
+        ``HighlightlyBaseClient`` return type, so ``with NFLClient(...) as c``
+        types ``c`` as ``NFLClient`` -- and every endpoint method on it stays
+        visible to the type checker inside the ``with`` block.
+        """
         return self
 
     def __exit__(
@@ -431,7 +450,7 @@ class HighlightlyBaseClient:
 
         prepared = build_request(
             method=method,
-            base_url=self.base_url,  # type: ignore[arg-type]  # resolved non-None in __init__
+            base_url=self._resolved_base_url,
             path=path,
             api_key=self._api_key,
             params=params,
