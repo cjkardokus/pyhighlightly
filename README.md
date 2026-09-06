@@ -67,6 +67,57 @@ either mechanism; the re-sync logic above (`_zero_observed_at` and the
 24-hour bounded re-sync) is unchanged and works the same regardless of which
 applies.
 
+## Caching
+
+Caching is **on by default**. Every endpoint method has a sensible default
+TTL based on how often Highlightly's own docs say that data actually
+refreshes — see `AmericanFootballClient.DEFAULT_CACHE_TTLS` for the full
+table and the reasoning behind each bucket. Roughly: static reference data
+(teams, players) is cached for hours; data that updates on the order of
+minutes-to-an-hour after a game (standings, team statistics, recent-game
+lookups) is cached for 15–30 minutes; anything that can change while a game
+is live (matches, a single match's detail, box scores, lineups, highlights)
+is **never** cached, so you always see the current state of an in-progress
+game.
+
+```python
+from pyhighlightly import NFLClient
+
+client = NFLClient(api_key="...")
+client.get_teams()  # network call
+client.get_teams()  # served from cache, no network call
+
+# Bypasses the cache read, refetches, and writes the fresh result back:
+client.get_teams(force_refresh=True)
+```
+
+**Overriding TTLs.** Pass `cache_ttls` at construction to override specific
+endpoints (by method name) without touching the rest:
+
+```python
+client = NFLClient(api_key="...", cache_ttls={"get_standings": 60})
+```
+
+A TTL of `0` means "never cache this endpoint," and is honored even if
+caching is otherwise enabled.
+
+**Swapping backends.** The default `InMemoryCache` lives in a single
+process and isn't shared across workers. `CacheBackend` is a public
+[`Protocol`](https://docs.python.org/3/library/typing.html#typing.Protocol)
+extension point — pass any object implementing `get`/`set`/`delete` (a
+Redis-backed cache, for example) as `cache=` to use it instead:
+
+```python
+client = NFLClient(api_key="...", cache=my_redis_backed_cache)
+```
+
+**Disabling caching entirely.** Pass `enable_cache=False` to turn off all
+caching, regardless of `cache_ttls`:
+
+```python
+client = NFLClient(api_key="...", enable_cache=False)
+```
+
 ## Known Limitations
 
 - **NFL highlight content appears sparse or absent via `get_highlights()`
