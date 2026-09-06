@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from pyhighlightly.models.american_football import (
     HighlightCategory,
     Match,
     MatchDetail,
+    Player,
     PlayerStatistics,
     PlayerSummary,
     Standings,
@@ -222,6 +224,30 @@ def test_get_teams_omits_league_for_base_client() -> None:
     assert "league" not in route.calls.last.request.url.params
 
 
+@pytest.mark.parametrize(
+    ("kwarg", "query_key", "value"),
+    [
+        ("name", "name", "Saints"),
+        ("display_name", "displayName", "New Orleans Saints"),
+        ("abbreviation", "abbreviation", "NO"),
+    ],
+)
+@respx.mock
+def test_get_teams_sends_each_filter_param_correctly(
+    kwarg: str, query_key: str, value: str
+) -> None:
+    # A typo in any one of these snake_case -> camelCase mappings would be
+    # invisible to every other test (which only ever exercise league/season
+    # defaults), to mypy, and to ruff -- it would only ever surface as a
+    # silently-unfiltered live result.
+    route = respx.get(f"{BASE_URL}/teams").mock(return_value=httpx.Response(200, json=[_TEAM]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_teams(**cast("dict[str, Any]", {kwarg: value}))
+
+    assert route.calls.last.request.url.params[query_key] == value
+
+
 # -- get_team --
 
 
@@ -302,6 +328,23 @@ def test_get_team_statistics_rejects_non_zero_padded_date_string() -> None:
         client.get_team_statistics(1, from_date="2024-3-5")
 
 
+@pytest.mark.parametrize("invalid_date", ["2024-02-31", "2024-13-01"])
+def test_get_team_statistics_rejects_well_formed_but_impossible_date(invalid_date: str) -> None:
+    # Distinct from the two tests above: these two strings pass the
+    # YYYY-MM-DD regex check (_DATE_PATTERN) but describe a date that
+    # doesn't exist -- Feb 31st, and a 13th month. Only strptime itself
+    # catches this, in _format_from_date's second guard. Untested before
+    # this, a refactor that dropped the strptime call would have kept
+    # every other test green while silently sending an impossible date to
+    # the API.
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(ValueError, match="from_date") as exc_info:
+        client.get_team_statistics(1, from_date=invalid_date)
+
+    assert invalid_date in str(exc_info.value)
+
+
 # -- get_matches --
 
 
@@ -343,6 +386,39 @@ def test_get_matches_does_not_override_explicit_league() -> None:
     client.get_matches(league="NCAA")
 
     assert route.calls.last.request.url.params["league"] == "NCAA"
+
+
+@pytest.mark.parametrize(
+    ("kwarg", "query_key", "value"),
+    [
+        ("date", "date", "2024-01-01"),
+        ("home_team_id", "homeTeamId", 5),
+        ("away_team_id", "awayTeamId", 7),
+        ("home_team_name", "homeTeamName", "Saints"),
+        ("away_team_name", "awayTeamName", "Falcons"),
+        ("home_team_abbreviation", "homeTeamAbbreviation", "NO"),
+        ("away_team_abbreviation", "awayTeamAbbreviation", "ATL"),
+        ("home_team_display_name", "homeTeamDisplayName", "New Orleans Saints"),
+        ("away_team_display_name", "awayTeamDisplayName", "Atlanta Falcons"),
+    ],
+)
+@respx.mock
+def test_get_matches_sends_each_filter_param_correctly(
+    kwarg: str, query_key: str, value: int | str
+) -> None:
+    # Each of these is also itself a valid "primary filter" on its own, so
+    # no other kwarg is needed to satisfy _require_at_least_one. A typo in
+    # any one of these snake_case -> camelCase mappings would be invisible
+    # to every other test, mypy, and ruff -- it would only ever surface as
+    # a silently-unfiltered live result.
+    route = respx.get(f"{BASE_URL}/matches").mock(
+        return_value=httpx.Response(200, json=_paginated([_MATCH]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_matches(**cast("dict[str, Any]", {kwarg: value}))
+
+    assert route.calls.last.request.url.params[query_key] == str(value)
 
 
 # -- get_match --
@@ -744,6 +820,37 @@ def test_get_highlights_omits_league_name_for_base_client() -> None:
     assert "leagueName" not in route.calls.last.request.url.params
 
 
+@pytest.mark.parametrize(
+    ("kwarg", "query_key", "value"),
+    [
+        ("date", "date", "2024-01-01"),
+        ("match_id", "matchId", 42),
+        ("home_team_id", "homeTeamId", 5),
+        ("away_team_id", "awayTeamId", 7),
+        ("home_team_name", "homeTeamName", "Saints"),
+        ("away_team_name", "awayTeamName", "Falcons"),
+        ("home_team_abbreviation", "homeTeamAbbreviation", "NO"),
+        ("away_team_abbreviation", "awayTeamAbbreviation", "ATL"),
+        ("home_team_display_name", "homeTeamDisplayName", "New Orleans Saints"),
+        ("away_team_display_name", "awayTeamDisplayName", "Atlanta Falcons"),
+    ],
+)
+@respx.mock
+def test_get_highlights_sends_each_filter_param_correctly(
+    kwarg: str, query_key: str, value: int | str
+) -> None:
+    # Same nine params as get_matches, plus matchId -- see that test's
+    # comment for why each of these is checked individually.
+    route = respx.get(f"{BASE_URL}/highlights").mock(
+        return_value=httpx.Response(200, json=_paginated([_HIGHLIGHT]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_highlights(**cast("dict[str, Any]", {kwarg: value}))
+
+    assert route.calls.last.request.url.params[query_key] == str(value)
+
+
 @respx.mock
 def test_get_highlight_returns_single_highlight_instance() -> None:
     respx.get(f"{BASE_URL}/highlights/105289").mock(
@@ -778,6 +885,90 @@ def test_highlight_category_parses_known_value() -> None:
 def test_highlight_category_coerces_unrecognized_value_to_other() -> None:
     highlight = Highlight.model_validate({**_HIGHLIGHT, "category": "some-brand-new-category"})
     assert highlight.category is HighlightCategory.OTHER
+
+
+# -- get_players --
+
+_PLAYER = {"id": 36017, "fullName": "Tom Brady", "logo": None}
+
+
+@respx.mock
+def test_get_players_returns_paginated_response_of_players() -> None:
+    respx.get(f"{BASE_URL}/players").mock(
+        return_value=httpx.Response(200, json=_paginated([_PLAYER]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    result = client.get_players()
+
+    assert isinstance(result.data[0], Player)
+    assert result.data[0].fullName == "Tom Brady"
+    assert result.pagination.totalCount == 1
+
+
+@respx.mock
+def test_get_players_sends_name_filter() -> None:
+    route = respx.get(f"{BASE_URL}/players").mock(
+        return_value=httpx.Response(200, json=_paginated([_PLAYER]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_players(name="Brady")
+
+    assert route.calls.last.request.url.params["name"] == "Brady"
+
+
+@respx.mock
+def test_get_players_omits_name_filter_when_not_given() -> None:
+    route = respx.get(f"{BASE_URL}/players").mock(
+        return_value=httpx.Response(200, json=_paginated([_PLAYER]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_players()
+
+    assert "name" not in route.calls.last.request.url.params
+
+
+@respx.mock
+def test_get_players_default_limit_is_1000() -> None:
+    # Distinct from get_matches' limit=100 and get_highlights' limit=40
+    # defaults -- confirm this endpoint's own default specifically, not
+    # just that some limit is sent.
+    route = respx.get(f"{BASE_URL}/players").mock(
+        return_value=httpx.Response(200, json=_paginated([_PLAYER]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_players()
+
+    assert route.calls.last.request.url.params["limit"] == "1000"
+
+
+@respx.mock
+def test_get_players_explicit_limit_overrides_default() -> None:
+    route = respx.get(f"{BASE_URL}/players").mock(
+        return_value=httpx.Response(200, json=_paginated([_PLAYER]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_players(limit=25)
+
+    assert route.calls.last.request.url.params["limit"] == "25"
+
+
+@respx.mock
+def test_get_players_accepts_zero_filter_call() -> None:
+    # Unlike get_matches/get_highlights, get_players has no primary-filter
+    # requirement -- a call with no arguments at all should succeed.
+    respx.get(f"{BASE_URL}/players").mock(
+        return_value=httpx.Response(200, json=_paginated([_PLAYER]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    result = client.get_players()
+
+    assert result.data[0].id == 36017
 
 
 # -- get_player / get_player_statistics --

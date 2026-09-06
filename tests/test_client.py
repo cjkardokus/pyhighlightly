@@ -30,6 +30,30 @@ def make_client() -> HighlightlyBaseClient:
     return HighlightlyBaseClient(api_key="test-key", base_url=BASE_URL)
 
 
+# -- constructor validation --
+
+
+def test_empty_api_key_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="api_key is required"):
+        HighlightlyBaseClient(api_key="", base_url=BASE_URL)
+
+
+def test_missing_base_url_raises_value_error() -> None:
+    # HighlightlyBaseClient has no base_url class attribute of its own
+    # (subclasses like AmericanFootballClient set one), so instantiating
+    # it directly with neither a constructor argument nor a subclass
+    # default should fail.
+    with pytest.raises(ValueError) as exc_info:
+        HighlightlyBaseClient(api_key="test-key")
+
+    # The message carries real information -- both ways to satisfy it --
+    # so pin both, not just that some ValueError was raised.
+    message = str(exc_info.value)
+    assert "base_url must be provided" in message
+    assert "constructor argument" in message
+    assert "class attribute on a subclass" in message
+
+
 @respx.mock
 def test_successful_request_parses_rate_limit_headers() -> None:
     route = respx.get(f"{BASE_URL}/teams").mock(
@@ -132,6 +156,46 @@ def test_429_raises_rate_limit_error_with_remaining_zero() -> None:
     assert exc_info.value.response_body == '{"message":"slow down"}'
     assert exc_info.value.preempted is False
     assert exc_info.value.retry_at is None
+
+
+@respx.mock
+def test_429_with_no_retry_after_header_does_not_crash() -> None:
+    respx.get(f"{BASE_URL}/teams").mock(
+        return_value=httpx.Response(
+            429,
+            json={"message": "slow down"},
+            headers={"x-ratelimit-requests-remaining": "0"},
+        )
+    )
+    client = make_client()
+
+    with pytest.raises(HighlightlyRateLimitError) as exc_info:
+        client._request("GET", "/teams")
+
+    assert exc_info.value.retry_after is None
+
+
+@respx.mock
+def test_429_with_http_date_retry_after_degrades_to_none() -> None:
+    # RFC 9110 permits retry-after as either a number of seconds or an
+    # HTTP-date; float() can't parse the latter. _parse_float_header should
+    # degrade to None rather than let a raw ValueError escape.
+    respx.get(f"{BASE_URL}/teams").mock(
+        return_value=httpx.Response(
+            429,
+            json={"message": "slow down"},
+            headers={
+                "x-ratelimit-requests-remaining": "0",
+                "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT",
+            },
+        )
+    )
+    client = make_client()
+
+    with pytest.raises(HighlightlyRateLimitError) as exc_info:
+        client._request("GET", "/teams")
+
+    assert exc_info.value.retry_after is None
 
 
 @respx.mock
@@ -423,6 +487,19 @@ def _page(items: list[int], total_count: int, offset: int) -> PaginatedResponse[
     )
 
 
+def test_paginate_returns_empty_iterator_for_a_zero_result_first_page() -> None:
+    # A routine, realistic response -- a filter that matches nothing --
+    # not an error case. `not page.data` should return cleanly rather than
+    # raising or yielding anything.
+    def fetch_fn(offset: int = 0, **kwargs: object) -> PaginatedResponse[_Item]:
+        return _page([], total_count=0, offset=0)
+
+    client = make_client()
+    items = list(client.paginate(fetch_fn))
+
+    assert items == []
+
+
 def test_paginate_yields_items_across_pages_and_stops_at_total_count() -> None:
     pages = {
         0: _page([1, 2], total_count=5, offset=0),
@@ -495,6 +572,28 @@ def test_close_closes_the_underlying_http_client() -> None:
     assert client._client.is_closed is False
 
     client.close()
+
+    assert client._client.is_closed is True
+
+
+def test_request_after_close_fails_the_way_a_closed_httpx_client_would() -> None:
+    # Distinct from the is_closed check above: this confirms the actual
+    # behavioral consequence of closing -- a real request attempted
+    # afterwards -- propagates cleanly rather than hanging, silently
+    # no-op'ing, or getting masked by something in _request.
+    client = make_client()
+    client.close()
+
+    with pytest.raises(RuntimeError, match="client has been closed"):
+        client._request("GET", "/teams")
+
+
+def test_with_block_closes_client_on_exit_even_if_the_block_raises() -> None:
+    client = make_client()
+
+    with pytest.raises(ValueError, match="boom"), client:
+        assert client._client.is_closed is False
+        raise ValueError("boom")
 
     assert client._client.is_closed is True
 
