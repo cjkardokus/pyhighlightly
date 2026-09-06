@@ -313,21 +313,30 @@ class AmericanFootballClient(HighlightlyBaseClient):
         undocumented leniency, not a guarantee, so this validation matches
         the *documented* contract rather than today's observed behavior.
 
-        **Known limitation: NFL highlight content appears sparse or absent
+        **Known limitation 1: NFL highlight content appears sparse or absent
         on the free tier.** ``NFLClient().get_highlights(...)`` may return
         an empty page even for filters that clearly should match something.
         This was investigated directly: querying this endpoint with
         ``matchId`` set to a real, currently-scheduled NFL match's id (taken
         from a working ``league="NFL"`` match lookup) and no other filter
         still returned zero results, meaning there's no highlight content
-        indexed for that match at all -- not a filtering problem. Separately,
-        the ``leagueName`` query parameter itself doesn't appear to filter
-        reliably regardless: e.g. ``leagueName="National Football League"``
-        returned results, but every one of them was still an NCAA match. So
-        this is not fixable by choosing a different ``default_league``
-        value or a different ``leagueName`` string -- if this is empty for
-        NFL, that's very likely genuine data sparsity on Highlightly's side,
-        not a bug in this client.
+        indexed for that match at all -- not a filtering problem. This is
+        not fixable by choosing a different ``default_league`` value -- if
+        this is empty for NFL, that's very likely genuine data sparsity on
+        Highlightly's side, not a bug in this client.
+
+        **Known limitation 2 (separate from the above): ``leagueName``'s
+        filtering reliability is unconfirmed, independent of whether there's
+        currently content to filter for.** ``leagueName="National Football
+        Conference"`` was observed returning NCAA matches -- i.e. the filter
+        may not reliably scope results to the requested league at all, as
+        distinct from there being nothing to return. This matters even once
+        real NFL highlight content exists later in the season: a caller
+        could get incorrectly-scoped results rather than just an empty
+        response. Until this is investigated further with real in-season
+        data, don't trust ``get_highlights()`` results to be correctly
+        pre-filtered by ``leagueName`` alone -- spot-check the returned
+        ``Highlight.match`` (or team) fields against what you asked for.
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if date is not None:

@@ -73,13 +73,21 @@ applies.
   on the free tier.** Investigated directly: querying `/highlights` with
   `matchId` set to a real, currently-scheduled NFL match's id and no other
   filter still returned zero results — there's no highlight content indexed
-  for that match at all, not a filtering bug. The `leagueName` query
-  parameter also doesn't appear to filter reliably in general (e.g.
-  `leagueName="National Football League"` returned results, but every one
-  was still an NCAA match). So an empty page from `NFLClient().get_highlights()`
-  is very likely genuine data sparsity on Highlightly's side, not a bug in
-  this client — see the docstring on `get_highlights()` for the full
-  investigation.
+  for that match at all, not a filtering bug. So an empty page from
+  `NFLClient().get_highlights()` is very likely genuine data sparsity on
+  Highlightly's side, not a bug in this client — see the docstring on
+  `get_highlights()` for the full investigation.
+
+- **Separately, `leagueName`'s filtering reliability on `/highlights` is
+  unconfirmed** — a different problem from the sparsity above, and one that
+  stays relevant once real NFL highlight content exists later in the
+  season. `leagueName="National Football Conference"` was observed
+  returning NCAA matches, meaning the filter may not reliably scope results
+  to the requested league at all: a caller could get incorrectly-scoped
+  results, not just an empty response. Until this is investigated further
+  with real in-season data, spot-check `get_highlights()` results against
+  the returned match/team fields rather than trusting them to be correctly
+  pre-filtered by `leagueName` alone.
 
 ## Development
 
