@@ -240,7 +240,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
 
     def get_matches(
         self,
-        date: str | None = None,
+        date: str | date | None = None,
         season: int | None = None,
         home_team_id: int | None = None,
         away_team_id: int | None = None,
@@ -262,6 +262,16 @@ class AmericanFootballClient(HighlightlyBaseClient):
         on its own. Use ``client.paginate(client.get_matches, ...)``
         explicitly if you want to walk every page of a large result set.
 
+        ``date`` accepts either a string already in "YYYY-MM-DD" format or
+        a ``datetime.date`` (formatted internally) -- the same dual-type
+        acceptance as ``get_team_statistics``' ``from_date``, for the same
+        reason: an Airflow ``{{ ds }}`` template renders as a string in
+        that exact format, while a plain ``date`` object is also accepted
+        for direct use. A string not already in that format raises
+        ``ValueError`` rather than being sent to the API as-is -- a
+        malformed date was previously sent through unvalidated, spending a
+        real request on a call guaranteed to fail.
+
         Highlightly's docs state: "At least one primary query parameter
         needs to be specified before you can retrieve the data" for this
         endpoint (``timezone``/``limit``/``offset`` don't count). That's
@@ -275,7 +285,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if date is not None:
-            params["date"] = date
+            params["date"] = _format_from_date(date)
         if season is not None:
             params["season"] = season
         if home_team_id is not None:
@@ -542,7 +552,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
     def get_highlights(
         self,
         league_name: str | None = None,
-        date: str | None = None,
+        date: str | date | None = None,
         season: int | None = None,
         match_id: int | None = None,
         home_team_id: int | None = None,
@@ -558,6 +568,16 @@ class AmericanFootballClient(HighlightlyBaseClient):
         force_refresh: bool = False,
     ) -> PaginatedResponse[Highlight]:
         """Fetch one page of highlight clips matching the given filters.
+
+        ``date`` accepts either a string already in "YYYY-MM-DD" format or
+        a ``datetime.date`` (formatted internally) -- the same dual-type
+        acceptance as ``get_team_statistics``' ``from_date``, for the same
+        reason: an Airflow ``{{ ds }}`` template renders as a string in
+        that exact format, while a plain ``date`` object is also accepted
+        for direct use. A string not already in that format raises
+        ``ValueError`` rather than being sent to the API as-is -- a
+        malformed date was previously sent through unvalidated, spending a
+        real request on a call guaranteed to fail.
 
         Highlightly's docs state: "At least one primary query parameter
         needs to be specified before you can retrieve the data" for this
@@ -602,7 +622,7 @@ class AmericanFootballClient(HighlightlyBaseClient):
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if date is not None:
-            params["date"] = date
+            params["date"] = _format_from_date(date)
         if season is not None:
             params["season"] = season
         if match_id is not None:

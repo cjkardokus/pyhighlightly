@@ -421,6 +421,25 @@ def test_get_matches_sends_each_filter_param_correctly(
     assert route.calls.last.request.url.params[query_key] == str(value)
 
 
+def test_get_matches_rejects_malformed_date_string() -> None:
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(ValueError, match="date"):
+        client.get_matches(date="01/05/2024")
+
+
+@respx.mock
+def test_get_matches_accepts_date_object() -> None:
+    route = respx.get(f"{BASE_URL}/matches").mock(
+        return_value=httpx.Response(200, json=_paginated([_MATCH]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_matches(date=date(2024, 3, 5))
+
+    assert route.calls.last.request.url.params["date"] == "2024-03-05"
+
+
 # -- get_match --
 
 
@@ -849,6 +868,25 @@ def test_get_highlights_sends_each_filter_param_correctly(
     client.get_highlights(**cast("dict[str, Any]", {kwarg: value}))
 
     assert route.calls.last.request.url.params[query_key] == str(value)
+
+
+def test_get_highlights_rejects_malformed_date_string() -> None:
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(ValueError, match="date"):
+        client.get_highlights(date="01/05/2024")
+
+
+@respx.mock
+def test_get_highlights_accepts_date_object() -> None:
+    route = respx.get(f"{BASE_URL}/highlights").mock(
+        return_value=httpx.Response(200, json=_paginated([_HIGHLIGHT]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_highlights(date=date(2024, 3, 5))
+
+    assert route.calls.last.request.url.params["date"] == "2024-03-05"
 
 
 @respx.mock
