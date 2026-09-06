@@ -14,6 +14,7 @@ from the actual httpx call, so an ``AsyncHighlightlyBaseClient`` built on
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -528,9 +529,28 @@ class HighlightlyBaseClient:
         otherwise collide between calls for different resources. ``params``
         is serialized with sorted keys so logically identical calls always
         produce the same key regardless of kwarg/insertion order.
+
+        Also includes ``self._resolved_base_url`` and a short fingerprint
+        of the API key -- the first 16 hex characters of its sha256 digest,
+        never the raw key itself, since cache keys can end up logged or
+        visible in a shared backend's key listing. Neither matters for the
+        default ``InMemoryCache``, which is already scoped to one client
+        instance, but ``CacheBackend`` is a documented extension point
+        (README: "Swapping backends") that a consuming project can point
+        at a shared store (Redis, say) across *multiple* client instances.
+        Without this, two different clients backed by the same store --
+        different ``base_url``s (a future ``BasketballClient`` alongside
+        ``AmericanFootballClient``), or the same sport on different API
+        keys/plan tiers, where responses genuinely differ -- would collide
+        on identical keys for an otherwise-identical call and serve each
+        other's cached data.
         """
+        api_key_fingerprint = hashlib.sha256(self._api_key.encode()).hexdigest()[:16]
         serialized_params = json.dumps(params, sort_keys=True, default=str)
-        return f"{endpoint_name}:{path}:{serialized_params}"
+        return (
+            f"{self._resolved_base_url}:{api_key_fingerprint}:"
+            f"{endpoint_name}:{path}:{serialized_params}"
+        )
 
     def _cached_request(
         self,

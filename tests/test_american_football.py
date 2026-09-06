@@ -8,6 +8,7 @@ from typing import Any, cast
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 from pyhighlightly.american_football import AmericanFootballClient
 from pyhighlightly.exceptions import HighlightlyNotFoundError, HighlightlyResponseError
@@ -22,6 +23,7 @@ from pyhighlightly.models.american_football import (
     PlayerSummary,
     Standings,
     Team,
+    TeamStatistic,
 )
 from pyhighlightly.nfl import NFLClient
 
@@ -248,6 +250,26 @@ def test_get_teams_sends_each_filter_param_correctly(
     assert route.calls.last.request.url.params[query_key] == value
 
 
+# -- force_refresh is keyword-only on every endpoint method --
+
+
+def test_force_refresh_cannot_be_passed_positionally_on_a_single_id_method() -> None:
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(TypeError, match="positional argument"):
+        client.get_team(1, True)  # type: ignore[call-arg]
+
+
+def test_force_refresh_cannot_be_passed_positionally_on_a_two_id_method() -> None:
+    # A second representative shape: two required positional args ahead of
+    # force_refresh, not just one -- confirms the `*,` separator was placed
+    # correctly regardless of how many positional params precede it.
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(TypeError, match="positional argument"):
+        client.get_head_to_head(1, 2, True)  # type: ignore[call-arg]
+
+
 # -- get_team --
 
 
@@ -419,6 +441,25 @@ def test_get_matches_sends_each_filter_param_correctly(
     client.get_matches(**cast("dict[str, Any]", {kwarg: value}))
 
     assert route.calls.last.request.url.params[query_key] == str(value)
+
+
+def test_get_matches_rejects_malformed_date_string() -> None:
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(ValueError, match="date"):
+        client.get_matches(date="01/05/2024")
+
+
+@respx.mock
+def test_get_matches_accepts_date_object() -> None:
+    route = respx.get(f"{BASE_URL}/matches").mock(
+        return_value=httpx.Response(200, json=_paginated([_MATCH]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_matches(date=date(2024, 3, 5))
+
+    assert route.calls.last.request.url.params["date"] == "2024-03-05"
 
 
 # -- get_match --
@@ -669,6 +710,25 @@ def test_box_score_statistic_value_accepts_loosely_typed_values(
     assert stat.value == value
 
 
+@pytest.mark.parametrize("value", [7, 10.5, "150"])
+def test_team_statistic_value_accepts_loosely_typed_non_null_values(
+    value: int | float | str,
+) -> None:
+    stat = TeamStatistic(name="Rushing Attempts", value=value)
+    assert stat.value == value
+
+
+def test_team_statistic_value_currently_rejects_none() -> None:
+    # Locks in the current non-nullable assumption on TeamStatistic.value
+    # (see its docstring): last checked live against get_match() on
+    # 2026-09-06 across 3 completed matches (204 individual statistics),
+    # no null was observed. If Highlightly is ever seen sending a null
+    # here, this test should be updated to expect acceptance (and the
+    # model's `| None` added) rather than just deleted.
+    with pytest.raises(ValidationError):
+        TeamStatistic(name="Rushing Attempts", value=None)  # type: ignore[arg-type]
+
+
 # -- get_last_five_games / get_head_to_head --
 
 
@@ -849,6 +909,25 @@ def test_get_highlights_sends_each_filter_param_correctly(
     client.get_highlights(**cast("dict[str, Any]", {kwarg: value}))
 
     assert route.calls.last.request.url.params[query_key] == str(value)
+
+
+def test_get_highlights_rejects_malformed_date_string() -> None:
+    client = AmericanFootballClient(api_key="test-key")
+
+    with pytest.raises(ValueError, match="date"):
+        client.get_highlights(date="01/05/2024")
+
+
+@respx.mock
+def test_get_highlights_accepts_date_object() -> None:
+    route = respx.get(f"{BASE_URL}/highlights").mock(
+        return_value=httpx.Response(200, json=_paginated([_HIGHLIGHT]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_highlights(date=date(2024, 3, 5))
+
+    assert route.calls.last.request.url.params["date"] == "2024-03-05"
 
 
 @respx.mock

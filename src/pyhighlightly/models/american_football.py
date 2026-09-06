@@ -121,7 +121,21 @@ class Forecast(BaseModel):
 
 
 class TeamStatistic(BaseModel):
-    """One named statistic value, as nested under ``MatchStatistics``."""
+    """One named statistic value, as nested under ``MatchStatistics``.
+
+    Unlike ``BoxScoreStatistic.value``/``PlayerStat.value`` (both
+    ``int | float | str | None``, for documented reasons -- see their own
+    docstrings), this is ``int | float | str`` with no ``| None``. That's
+    a checked assumption, not an unexamined one: 3 real, completed NFL
+    matches (6 team-sides, 204 individual statistics total, spanning
+    values of all three non-null types) were fetched via ``get_match()``
+    on 2026-09-06 specifically to check for a null here, and none was
+    found. A sample of 3 games is not a guarantee for a field this
+    project hasn't otherwise been able to confirm never goes null --
+    if a ``ValidationError`` is ever reported against this field, add
+    ``| None`` the same way the other two models already have it, citing
+    the observed example.
+    """
 
     name: str
     value: int | float | str

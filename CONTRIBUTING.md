@@ -50,8 +50,12 @@ If you're adding coverage for a new Highlightly endpoint:
   defaulting via `self._with_default(...)`, and route the actual call
   through `self._cached_request(...)` rather than `self._request(...)`
   directly, so it participates in caching and rate-limit handling the same
-  way every other endpoint does. Add a `force_refresh: bool = False`
-  parameter and a `DEFAULT_CACHE_TTLS` entry for it.
+  way every other endpoint does. Add a keyword-only `force_refresh: bool
+  = False` parameter (`*, force_refresh: bool = False` in the signature —
+  every endpoint method takes it this way, so a caller can't pass it
+  positionally and a later filter argument inserted before it can't
+  silently change what an existing positional call means) and a
+  `DEFAULT_CACHE_TTLS` entry for it.
 - **Validate against the live API, not just Highlightly's written docs**,
   before trusting a response shape. Several endpoints in this project's
   history turned out to differ from what the docs show — an undocumented
