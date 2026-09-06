@@ -165,15 +165,22 @@ class HighlightlyBaseClient:
     window simply restarts. This trades a small chance of one wasted request
     every ~24 hours for the guarantee that the client can't wedge itself.
 
-    In practice, a reset around midnight UTC has been observed for a key
-    issued directly through Highlightly's own platform. This may differ from
-    RapidAPI's documented subscription-anchored rolling window for keys
-    issued through RapidAPI's marketplace, since Highlightly's own docs state
-    accounts are not synced across the two platforms. Because the exact reset
-    mechanism isn't guaranteed, confirmed by Highlightly's written
-    documentation, or exposed via any response header, this client's re-sync
-    logic is deliberately agnostic to it -- it doesn't assume or depend on
-    knowing which applies.
+    In practice, a reset at midnight UTC has now been confirmed twice,
+    independently, for a key issued directly through Highlightly's own
+    platform: on two separate days, that key's dashboard reset to 0% at
+    almost exactly midnight UTC, and on the second occasion this project's
+    own live validation traffic made exactly 16 requests after that reset
+    boundary mid-session -- which matched the dashboard's usage count
+    exactly. This may still differ from RapidAPI's documented
+    subscription-anchored rolling window for keys issued through RapidAPI's
+    marketplace, since Highlightly's own docs state accounts are not synced
+    across the two platforms -- and two consistent observations are still
+    not a documented guarantee from Highlightly, so it could change without
+    notice. Because the exact reset mechanism isn't confirmed by
+    Highlightly's written documentation or exposed via any response header,
+    this client's re-sync logic (``_zero_observed_at`` and the 24-hour
+    bounded re-sync above) is deliberately agnostic to it -- it doesn't
+    assume or depend on knowing which mechanism applies.
     """
 
     base_url: str | None = None

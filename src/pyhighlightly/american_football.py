@@ -312,6 +312,22 @@ class AmericanFootballClient(HighlightlyBaseClient):
         anyway (returns 200, not the documented 400) -- but that's
         undocumented leniency, not a guarantee, so this validation matches
         the *documented* contract rather than today's observed behavior.
+
+        **Known limitation: NFL highlight content appears sparse or absent
+        on the free tier.** ``NFLClient().get_highlights(...)`` may return
+        an empty page even for filters that clearly should match something.
+        This was investigated directly: querying this endpoint with
+        ``matchId`` set to a real, currently-scheduled NFL match's id (taken
+        from a working ``league="NFL"`` match lookup) and no other filter
+        still returned zero results, meaning there's no highlight content
+        indexed for that match at all -- not a filtering problem. Separately,
+        the ``leagueName`` query parameter itself doesn't appear to filter
+        reliably regardless: e.g. ``leagueName="National Football League"``
+        returned results, but every one of them was still an NCAA match. So
+        this is not fixable by choosing a different ``default_league``
+        value or a different ``leagueName`` string -- if this is empty for
+        NFL, that's very likely genuine data sparsity on Highlightly's side,
+        not a bug in this client.
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if date is not None:
