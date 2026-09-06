@@ -22,6 +22,7 @@ from types import TracebackType
 from typing import Any, ClassVar, TypeVar, cast
 
 import httpx
+from pydantic import ValidationError
 
 from pyhighlightly.cache import CacheBackend, InMemoryCache
 from pyhighlightly.exceptions import (
@@ -29,6 +30,7 @@ from pyhighlightly.exceptions import (
     HighlightlyAuthError,
     HighlightlyNotFoundError,
     HighlightlyRateLimitError,
+    HighlightlyResponseError,
 )
 from pyhighlightly.models.common import PaginatedResponse
 
@@ -115,27 +117,48 @@ def parse_rate_limit_headers(headers: httpx.Headers) -> RateLimitInfo:
 def raise_for_response(response: httpx.Response, rate_limit: RateLimitInfo) -> None:
     """Raise the appropriate ``HighlightlyError`` subclass for an error response.
 
-    Returns ``None`` (does nothing) for a successful response.
+    Returns ``None`` (does nothing) for a successful response. Every raise
+    site below populates ``url``/``response_body`` from the triggering
+    response, alongside whatever fields are specific to that exception
+    type -- see the docstrings in ``exceptions.py``.
     """
     status = response.status_code
+    if status < 400:
+        return
+
+    url = str(response.request.url)
+    body = response.text
+
     if status in (401, 403):
         raise HighlightlyAuthError(
-            f"Authentication failed with status {status}", status_code=status
+            f"Authentication failed with status {status}",
+            status_code=status,
+            url=url,
+            response_body=body,
         )
     if status == 404:
-        raise HighlightlyNotFoundError(f"Resource not found: {response.request.url}")
+        raise HighlightlyNotFoundError(
+            f"Resource not found: {url}",
+            status_code=status,
+            url=url,
+            response_body=body,
+        )
     if status == 429:
         raise HighlightlyRateLimitError(
             "Rate limit exceeded",
             retry_after=_parse_float_header(response.headers.get("retry-after")),
             requests_remaining=rate_limit.requests_remaining,
-        )
-    if status >= 400:
-        raise HighlightlyAPIError(
-            f"Highlightly API error: {status}",
             status_code=status,
-            response_body=response.text,
+            url=url,
+            response_body=body,
+            preempted=False,
         )
+    raise HighlightlyAPIError(
+        f"Highlightly API error: {status}",
+        status_code=status,
+        url=url,
+        response_body=body,
+    )
 
 
 class HighlightlyBaseClient:
@@ -295,6 +318,20 @@ class HighlightlyBaseClient:
             return True
         return self._now() - self._zero_observed_at < _STALE_ZERO_RESYNC_WINDOW
 
+    def _preemption_retry_at(self) -> datetime | None:
+        """The exact time this client will next let a real request through,
+        for a ``HighlightlyRateLimitError`` raised by local preemption (see
+        ``_should_preempt_for_rate_limit``).
+
+        ``None`` only in the defensive edge case where preemption fires
+        with no recorded observation time at all -- see the comment in
+        ``_should_preempt_for_rate_limit`` -- since there's nothing to
+        compute a resync time from in that case.
+        """
+        if self._zero_observed_at is None:
+            return None
+        return self._zero_observed_at + _STALE_ZERO_RESYNC_WINDOW
+
     def _record_zero_observation(self, requests_remaining: int | None) -> None:
         """Track when ``requests_remaining`` was last seen to hit 0.
 
@@ -442,12 +479,6 @@ class HighlightlyBaseClient:
         reported the rate-limit budget as exhausted (and the local re-sync
         window for that observation hasn't elapsed yet).
         """
-        if self._should_preempt_for_rate_limit():
-            raise HighlightlyRateLimitError(
-                "Rate limit budget exhausted; refusing to make a new request",
-                requests_remaining=0,
-            )
-
         prepared = build_request(
             method=method,
             base_url=self._resolved_base_url,
@@ -455,6 +486,19 @@ class HighlightlyBaseClient:
             api_key=self._api_key,
             params=params,
         )
+
+        if self._should_preempt_for_rate_limit():
+            # Built above, before the preemption check, purely for this:
+            # no request is actually sent on this path, but the exception
+            # can still say which call was blocked.
+            raise HighlightlyRateLimitError(
+                "Rate limit budget exhausted; refusing to make a new request",
+                requests_remaining=0,
+                preempted=True,
+                retry_at=self._preemption_retry_at(),
+                url=prepared.url,
+            )
+
         response = self._client.request(
             prepared.method,
             prepared.url,
@@ -522,9 +566,41 @@ class HighlightlyBaseClient:
                     return cast(_T, cached)
 
         response = self._request(method, path, params=params)
-        result = parse(response)
+        result = self._parse_response(response, parse)
 
         if use_cache and cache_key is not None:
             self._cache.set(cache_key, result, ttl)
 
         return result
+
+    def _parse_response(
+        self, response: httpx.Response, parse: Callable[[httpx.Response], _T]
+    ) -> _T:
+        """Run ``parse`` over a successful response, turning the two "this
+        response doesn't look like what we expected" failure modes into
+        ``HighlightlyResponseError`` instead of letting them escape raw.
+
+        Covers a pydantic ``ValidationError`` (the API returned a shape
+        this library's models don't match -- schema drift) and a
+        ``json.JSONDecodeError`` (the body wasn't JSON at all, e.g. an HTML
+        maintenance page on an otherwise-200 response). The original
+        exception is chained via ``raise ... from exc``, so it's still
+        inspectable as ``__cause__``.
+
+        A ``HighlightlyError`` raised by ``parse`` itself is deliberately
+        *not* caught here and passes through unchanged -- e.g.
+        ``AmericanFootballClient``'s empty-single-resource-array guards
+        raise ``HighlightlyNotFoundError`` directly, which is an error
+        ``parse`` already identified on purpose, not a shape it failed to
+        understand.
+        """
+        try:
+            return parse(response)
+        except (ValidationError, json.JSONDecodeError) as exc:
+            url = str(response.request.url)
+            raise HighlightlyResponseError(
+                f"Could not parse response from {url}: {exc}",
+                status_code=response.status_code,
+                url=url,
+                response_body=response.text,
+            ) from exc
