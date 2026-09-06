@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class MatchState(str, Enum):
@@ -417,3 +417,181 @@ class BoxScoreResult(BaseModel):
 
     home: TeamBoxScore
     away: TeamBoxScore
+
+
+class HighlightType(str, Enum):
+    """Whether a highlight clip has been manually verified by Highlightly."""
+
+    VERIFIED = "VERIFIED"
+    UNVERIFIED = "UNVERIFIED"
+
+
+class HighlightCategory(str, Enum):
+    """The kind of play or content a ``Highlight`` clip covers."""
+
+    MATCH_HIGHLIGHTS = "match-highlights"
+    TOUCHDOWN_PASS = "touchdown-pass"
+    TOUCHDOWN_RUSH = "touchdown-rush"
+    TOUCHDOWN_RECEPTION = "touchdown-reception"
+    TOUCHDOWN = "touchdown"
+    INTERCEPTION = "interception"
+    INTERCEPTION_RETURN_TD = "interception-return-td"
+    FUMBLE = "fumble"
+    FUMBLE_RECOVERY_TD = "fumble-recovery-td"
+    SACK = "sack"
+    FIELD_GOAL = "field-goal"
+    SAFETY = "safety"
+    SPECIAL_TEAMS_PLAY = "special-teams-play"
+    SPECIAL_TEAMS_TD = "special-teams-td"
+    TWO_POINT_CONVERSION = "two-point-conversion"
+    PENALTY = "penalty"
+    BIG_PLAY = "big-play"
+    DEFENSIVE_PLAY = "defensive-play"
+    VIRAL_MOMENT = "viral-moment"
+    INJURY = "injury"
+    PRE_MATCH_CONTENT = "pre-match-content"
+    POST_MATCH_CONTENT = "post-match-content"
+    OTHER = "other"
+
+
+class HighlightMatch(BaseModel):
+    """The match info embedded in a ``Highlight``.
+
+    Deliberately a separate model from ``Match``, not a reuse of it: a live
+    response confirmed a highlight's nested ``match`` object never includes
+    ``state`` (checked across ten highlights spanning both pre-match and
+    post-match content), so validating it against ``Match`` -- which
+    requires ``state`` -- would fail on every real highlight response.
+    """
+
+    id: int
+    round: str
+    date: datetime
+    league: str
+    season: int
+    awayTeam: Team
+    homeTeam: Team
+
+
+class Highlight(BaseModel):
+    """A highlight clip, as returned by ``get_highlights()``/``get_highlight()``."""
+
+    id: int
+    type: HighlightType
+    imgUrl: str
+    title: str
+    description: str | None = None
+    url: str
+    embedUrl: str | None = None
+    match: HighlightMatch
+    channel: str | None = None
+    source: str
+    category: HighlightCategory
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _fall_back_to_other_for_unknown_categories(cls, value: object) -> object:
+        """Coerce an unrecognized category value to ``OTHER`` instead of
+        raising.
+
+        Highlightly's docs say unrecognized clips are already labeled
+        "other" on their side, but this taxonomy is actively growing --
+        new category strings are plausible over time. A published client
+        library shouldn't hard-crash on every new category Highlightly
+        adds until someone updates this enum; falling back to ``OTHER`` is
+        deliberate, documented, forward-compatible behavior, not a gap.
+        """
+        try:
+            HighlightCategory(value)
+        except ValueError:
+            return HighlightCategory.OTHER
+        return value
+
+
+class Player(BaseModel):
+    """A player, as returned by ``get_players()``."""
+
+    id: int
+    fullName: str
+    logo: str | None = None
+
+
+class Draft(BaseModel):
+    """A player's draft position, as nested under ``PlayerProfile``."""
+
+    round: int
+    year: int
+    pick: int
+
+
+class PlayerPosition(BaseModel):
+    """A player's position, as nested under ``PlayerProfile``."""
+
+    main: str
+    abbreviation: str
+
+
+class PlayerProfile(BaseModel):
+    """A player's biographical/roster info, as nested under ``PlayerSummary``.
+
+    ``jersey``, ``height``, and ``weight`` are strings (e.g. ``"12"``,
+    ``"6' 4\\""``, ``"225 lbs"``), confirmed against a live response --
+    not parsed into numbers, matching the API exactly.
+    """
+
+    fullName: str
+    birthPlace: str
+    birthDate: str
+    height: str
+    jersey: str
+    weight: str
+    isActive: bool
+    position: PlayerPosition
+    draft: Draft | None = None
+    team: Team
+
+
+class PlayerSummary(Player):
+    """Full detail for a single player, returned by ``get_player(id)``.
+
+    Extends ``Player`` with the additional ``profile`` field only available
+    when querying a specific player by id -- same pattern as
+    ``Match``/``MatchDetail``.
+    """
+
+    profile: PlayerProfile
+
+
+class PlayerStat(BaseModel):
+    """One named statistic value, as nested under ``PlayerSeasonStats``.
+
+    ``value`` is loosely typed for the same reason as
+    ``BoxScoreStatistic.value``: a stat can be numeric, a formatted string,
+    or null, and forcing numeric coercion would break on the non-numeric
+    ones.
+    """
+
+    name: str
+    value: int | float | str | None = None
+    category: str
+
+
+class PlayerSeasonStats(BaseModel):
+    """One season's worth of statistics, as nested under ``PlayerStatistics``."""
+
+    stats: list[PlayerStat]
+    teams: list[Team]
+    league: str
+    season: int
+    #: "Entire" or "Season" per the docs -- plain ``str`` rather than an
+    #: enum, since (unlike the actively-growing highlight categories) this
+    #: is a stable two-value field with no real forward-compat concern.
+    seasonBreakdown: str
+
+
+class PlayerStatistics(Player):
+    """Full season-by-season statistics for a player, returned by
+    ``get_player_statistics(id)``.
+    """
+
+    perSeason: list[PlayerSeasonStats]

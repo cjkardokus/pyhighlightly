@@ -271,6 +271,29 @@ class HighlightlyBaseClient:
             return params
         return {**params, key: value}
 
+    def _require_at_least_one(
+        self, params: dict[str, Any], secondary_keys: set[str], endpoint_name: str
+    ) -> None:
+        """Raise ``ValueError`` if ``params`` has no keys outside ``secondary_keys``.
+
+        Some Highlightly endpoints document a hard requirement that at
+        least one "primary" query parameter be present -- pagination and
+        similar bookkeeping params alone don't satisfy it -- and reject a
+        call missing one with an HTTP 400. Checking this client-side, before
+        the network call, means that guaranteed-400 call never spends a
+        request in the first place. This is a generic dict-inspection
+        primitive with no sport-specific knowledge, so it lives here rather
+        than on ``AmericanFootballClient``. ``endpoint_name`` is used only in
+        the error message, to point the caller at which call failed and why.
+        """
+        if not set(params) - secondary_keys:
+            raise ValueError(
+                f"{endpoint_name}() requires at least one primary filter argument "
+                f"beyond {sorted(secondary_keys)}; Highlightly's API documents "
+                "this endpoint as rejecting a call with none of these with an "
+                "HTTP 400."
+            )
+
     def paginate(
         self,
         fetch_fn: Callable[..., PaginatedResponse[_T]],
