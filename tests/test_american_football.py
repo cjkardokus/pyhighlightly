@@ -9,7 +9,13 @@ import pytest
 import respx
 
 from pyhighlightly.american_football import AmericanFootballClient
-from pyhighlightly.models.american_football import MatchDetail, Team
+from pyhighlightly.models.american_football import (
+    BoxScoreStatistic,
+    Match,
+    MatchDetail,
+    Standings,
+    Team,
+)
 from pyhighlightly.nfl import NFLClient
 
 BASE_URL = "https://american-football.highlightly.net"
@@ -331,3 +337,234 @@ def test_get_match_returns_match_detail_with_nested_fields() -> None:
     assert match.events[0].result == "Punt"
     assert match.predictions is not None
     assert match.predictions.prematch[0].probabilities.away == "69.78%"
+
+
+_STANDINGS_GROUP = {
+    "leagueName": "American Football Conference",
+    "abbreviation": "AFC",
+    "year": 2024,
+    "leagueType": "NFL",
+    "seasonType": "Preseason",
+    "startDate": "2024-08-01T07:00:00.000Z",
+    "endDate": "2024-09-05T06:59:00.000Z",
+    "data": [
+        {
+            "team": _TEAM_NO_LEAGUE,
+            "statistics": [{"value": "+4", "displayName": "Differential"}],
+        }
+    ],
+}
+
+
+def _standings_envelope(groups: list[object]) -> dict[str, object]:
+    return {
+        "data": groups,
+        "pagination": {"totalCount": len(groups), "offset": 0, "limit": 10},
+        "plan": {"tier": "BASIC", "message": "Some results might be hidden with FREE tier"},
+    }
+
+
+_LINEUP_PLAYER = {
+    "id": 45642302,
+    "jersey": 11,
+    "player": "Logan Woodside",
+    "position": "Quarterback",
+    "positionAbbreviation": "QB",
+    "isStarter": True,
+}
+
+_LINEUPS = {
+    "home": {"team": _TEAM_NO_LEAGUE, "lineup": [_LINEUP_PLAYER]},
+    "away": {"team": _TEAM_NO_LEAGUE, "lineup": [_LINEUP_PLAYER]},
+}
+
+_BOX_SCORE_RAW = [
+    {
+        "team": {
+            "id": 92750,
+            "logo": "https://example.com/logos/team/92750.png",
+            "name": "Eagles",
+            "boxScores": [
+                {
+                    "player": {"id": 60611792, "name": "Jalen Hurts", "jersey": 1},
+                    "statistics": [
+                        {"group": "Passing", "name": "Total Passing Yards", "value": 221}
+                    ],
+                }
+            ],
+        }
+    },
+    {
+        "team": {
+            "id": 92764,
+            "logo": "https://example.com/logos/team/92764.png",
+            "name": "Broncos",
+            "boxScores": [
+                {
+                    "player": {"id": 12345, "name": "Bo Nix", "jersey": None},
+                    "statistics": [
+                        {"group": "Passing", "name": "Total Passing Yards", "value": "150"}
+                    ],
+                }
+            ],
+        }
+    },
+]
+
+
+# -- get_standings --
+
+
+def test_standings_model_parses_a_single_group_without_an_envelope() -> None:
+    # Standings itself carries no pagination/plan fields -- those live one
+    # level up, on the PaginatedResponse[Standings] that wraps it (see
+    # get_standings and Standings' docstring: a live response confirmed the
+    # envelope IS present at that outer level, contrary to a first read of
+    # the written docs' single-group example).
+    standings = Standings.model_validate(_STANDINGS_GROUP)
+
+    assert standings.leagueName == "American Football Conference"
+    assert standings.abbreviation == "AFC"
+    assert standings.seasonType == "Preseason"
+    assert standings.data[0].statistics[0].displayName == "Differential"
+
+
+@respx.mock
+def test_get_standings_returns_paginated_response_of_groups() -> None:
+    respx.get(f"{BASE_URL}/standings").mock(
+        return_value=httpx.Response(200, json=_standings_envelope([_STANDINGS_GROUP]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    result = client.get_standings(year=2024)
+
+    assert result.pagination.totalCount == 1
+    assert result.data[0].abbreviation == "AFC"
+
+
+@respx.mock
+def test_get_standings_applies_default_league_type_for_nfl_client() -> None:
+    route = respx.get(f"{BASE_URL}/standings").mock(
+        return_value=httpx.Response(200, json=_standings_envelope([_STANDINGS_GROUP]))
+    )
+    client = NFLClient(api_key="test-key")
+
+    client.get_standings()
+
+    assert route.calls.last.request.url.params["leagueType"] == "NFL"
+
+
+@respx.mock
+def test_get_standings_passes_through_explicit_conference_filters() -> None:
+    route = respx.get(f"{BASE_URL}/standings").mock(
+        return_value=httpx.Response(200, json=_standings_envelope([_STANDINGS_GROUP]))
+    )
+    client = NFLClient(api_key="test-key")
+
+    client.get_standings(league_name="American Football Conference", abbreviation="AFC")
+
+    params = route.calls.last.request.url.params
+    assert params["leagueType"] == "NFL"
+    assert params["leagueName"] == "American Football Conference"
+    assert params["abbreviation"] == "AFC"
+
+
+@respx.mock
+def test_get_standings_omits_league_type_for_base_client() -> None:
+    route = respx.get(f"{BASE_URL}/standings").mock(
+        return_value=httpx.Response(200, json=_standings_envelope([_STANDINGS_GROUP]))
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_standings()
+
+    assert "leagueType" not in route.calls.last.request.url.params
+
+
+# -- get_lineups --
+
+
+@respx.mock
+def test_get_lineups_parses_home_and_away() -> None:
+    respx.get(f"{BASE_URL}/lineups/1").mock(return_value=httpx.Response(200, json=_LINEUPS))
+    client = AmericanFootballClient(api_key="test-key")
+
+    lineups = client.get_lineups(1)
+
+    assert lineups.home.team.displayName == "New Orleans Saints"
+    assert lineups.home.lineup[0].player == "Logan Woodside"
+    assert lineups.away.lineup[0].positionAbbreviation == "QB"
+
+
+# -- get_box_score --
+
+
+@respx.mock
+def test_get_box_score_maps_raw_array_to_home_and_away_in_order() -> None:
+    respx.get(f"{BASE_URL}/box-score/1").mock(return_value=httpx.Response(200, json=_BOX_SCORE_RAW))
+    client = AmericanFootballClient(api_key="test-key")
+
+    result = client.get_box_score(1)
+
+    # Order matters: index 0 of the raw array is home, index 1 is away.
+    assert result.home.name == "Eagles"
+    assert result.home.boxScores[0].player.name == "Jalen Hurts"
+    assert result.away.name == "Broncos"
+    assert result.away.boxScores[0].player.jersey is None
+
+
+@pytest.mark.parametrize("value", [7, 10.5, "150", None])
+def test_box_score_statistic_value_accepts_loosely_typed_values(
+    value: int | float | str | None,
+) -> None:
+    stat = BoxScoreStatistic(group="Passing", name="Some Stat", value=value)
+    assert stat.value == value
+
+
+# -- get_last_five_games / get_head_to_head --
+
+
+@respx.mock
+def test_get_last_five_games_returns_list_of_matches() -> None:
+    respx.get(f"{BASE_URL}/last-five-games").mock(return_value=httpx.Response(200, json=[_MATCH]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    matches = client.get_last_five_games(1)
+
+    assert matches == [Match.model_validate(_MATCH)]
+
+
+@respx.mock
+def test_get_last_five_games_sends_team_id_param() -> None:
+    route = respx.get(f"{BASE_URL}/last-five-games").mock(
+        return_value=httpx.Response(200, json=[_MATCH])
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_last_five_games(42)
+
+    assert route.calls.last.request.url.params["teamId"] == "42"
+
+
+@respx.mock
+def test_get_head_to_head_returns_list_of_matches() -> None:
+    respx.get(f"{BASE_URL}/head-2-head").mock(return_value=httpx.Response(200, json=[_MATCH]))
+    client = AmericanFootballClient(api_key="test-key")
+
+    matches = client.get_head_to_head(1, 2)
+
+    assert matches == [Match.model_validate(_MATCH)]
+
+
+@respx.mock
+def test_get_head_to_head_sends_both_team_id_params() -> None:
+    route = respx.get(f"{BASE_URL}/head-2-head").mock(
+        return_value=httpx.Response(200, json=[_MATCH])
+    )
+    client = AmericanFootballClient(api_key="test-key")
+
+    client.get_head_to_head(1, 2)
+
+    params = route.calls.last.request.url.params
+    assert params["teamIdOne"] == "1"
+    assert params["teamIdTwo"] == "2"
