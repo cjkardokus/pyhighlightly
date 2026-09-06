@@ -171,6 +171,58 @@ def test_cache_key_differs_for_different_paths_with_identical_params() -> None:
     assert key_a != key_b
 
 
+def test_cache_key_differs_across_clients_with_different_base_urls() -> None:
+    # A CacheBackend can be shared across multiple client instances (see
+    # the README's "Swapping backends" section) -- e.g. a future
+    # BasketballClient sharing a Redis-backed cache with an
+    # AmericanFootballClient. Without base_url in the key, both would
+    # collide on an identical endpoint_name/path/params call and serve
+    # each other's data.
+    client_a = AmericanFootballClient(api_key="test-key")
+    client_b = AmericanFootballClient(api_key="test-key", base_url="https://example.test")
+
+    key_a = client_a._build_cache_key("get_teams", "/teams", {})
+    key_b = client_b._build_cache_key("get_teams", "/teams", {})
+
+    assert key_a != key_b
+
+
+def test_cache_key_differs_across_clients_with_different_api_keys() -> None:
+    # Same base_url, different API keys -- e.g. two plan tiers whose
+    # responses genuinely differ (every envelope carries its own `plan`
+    # field). A shared backend must not let one serve the other's cache.
+    client_a = AmericanFootballClient(api_key="key-one")
+    client_b = AmericanFootballClient(api_key="key-two")
+
+    key_a = client_a._build_cache_key("get_teams", "/teams", {})
+    key_b = client_b._build_cache_key("get_teams", "/teams", {})
+
+    assert key_a != key_b
+
+
+def test_cache_key_is_identical_for_two_clients_with_the_same_identity() -> None:
+    # The normal case: caching still has to work when two separate client
+    # instances genuinely share the same base_url and api_key (e.g. two
+    # NFLClient instances in the same process) -- this isn't only about
+    # making keys differ, it's about making them differ for the right
+    # reason.
+    client_a = AmericanFootballClient(api_key="test-key")
+    client_b = AmericanFootballClient(api_key="test-key")
+
+    key_a = client_a._build_cache_key("get_teams", "/teams", {})
+    key_b = client_b._build_cache_key("get_teams", "/teams", {})
+
+    assert key_a == key_b
+
+
+def test_cache_key_does_not_contain_the_raw_api_key() -> None:
+    # The fingerprint must not let the raw key leak into a cache key that
+    # could end up logged or visible in a shared backend's key listing.
+    client = AmericanFootballClient(api_key="super-secret-key")
+    key = client._build_cache_key("get_teams", "/teams", {})
+    assert "super-secret-key" not in key
+
+
 # -- caching in the request flow --
 
 
