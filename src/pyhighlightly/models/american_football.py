@@ -287,3 +287,133 @@ class TeamStatistics(BaseModel):
     away: TeamStatisticsSplit
     leagueName: str
     round: str
+
+
+class StandingsStatistic(BaseModel):
+    """One named standings figure, e.g. ``{"value": "+55", "displayName":
+    "Point Differential"}``.
+
+    Distinct from ``TeamStatistic``/``BoxScoreStatistic``, which use a
+    different ``{group, name, value}`` shape -- standings figures are always
+    pre-formatted display strings (win percentages, streaks like ``"W3"``,
+    "-" for not-applicable), never raw numbers.
+    """
+
+    value: str
+    displayName: str
+
+
+class StandingsEntry(BaseModel):
+    """One team's row within a ``Standings`` group."""
+
+    team: Team
+    statistics: list[StandingsStatistic]
+
+
+class Standings(BaseModel):
+    """One standings group: a single conference's table for one season type.
+
+    Returned by ``get_standings()`` as ``PaginatedResponse[Standings]``, not
+    as a single object: a real response contains one ``Standings`` entry per
+    (conference, season type) combination matching the query -- e.g.
+    querying ``leagueType="NFL"`` for a given year returns six of these
+    (AFC/NFC x Preseason/Regular Season/Postseason), each with its own
+    ``data`` list of team rows. This *does* carry the usual
+    ``pagination``/``plan`` envelope, confirmed against a live response --
+    unlike ``/teams``, this endpoint's ``limit``/``offset`` params are real
+    pagination over these groups, not a red herring.
+    """
+
+    leagueName: str
+    abbreviation: str
+    year: int
+    leagueType: str
+    seasonType: str
+    startDate: datetime
+    endDate: datetime
+    data: list[StandingsEntry]
+
+
+class LineupPlayer(BaseModel):
+    """One player within a ``TeamLineup``."""
+
+    id: int
+    jersey: int
+    player: str
+    position: str
+    positionAbbreviation: str
+    isStarter: bool
+
+
+class TeamLineup(BaseModel):
+    """One side's lineup, as nested under ``Lineups``."""
+
+    team: Team
+    lineup: list[LineupPlayer]
+
+
+class Lineups(BaseModel):
+    """Both teams' lineups for a match, as returned by ``get_lineups()``."""
+
+    home: TeamLineup
+    away: TeamLineup
+
+
+class BoxScorePlayer(BaseModel):
+    """A player referenced in a ``PlayerBoxScore``.
+
+    ``jersey`` has been observed ``null`` on live responses (e.g. for a
+    player who didn't dress), despite the docs showing it as always present.
+    """
+
+    id: int
+    name: str
+    jersey: int | None = None
+
+
+class BoxScoreStatistic(BaseModel):
+    """One named box-score figure, e.g. ``{"group": "Passing", "name":
+    "Total Passing Yards", "value": 221}``.
+
+    ``value`` is genuinely loosely typed per the API docs -- a stat can be
+    numeric, a formatted string, or null/absent -- so it's deliberately not
+    coerced to a single numeric type here.
+    """
+
+    group: str
+    name: str
+    value: int | float | str | None = None
+
+
+class PlayerBoxScore(BaseModel):
+    """One player's box-score line, as nested under ``TeamBoxScore``."""
+
+    player: BoxScorePlayer
+    statistics: list[BoxScoreStatistic]
+
+
+class TeamBoxScore(BaseModel):
+    """One team's box score, as returned (nested) by ``get_box_score()``."""
+
+    id: int
+    name: str
+    logo: str | None = None
+    boxScores: list[PlayerBoxScore]
+
+
+class BoxScoreResult(BaseModel):
+    """Both teams' box scores for a match, as returned by ``get_box_score()``.
+
+    The raw API response is an unlabeled two-element array,
+    ``[{"team": {...home box score...}}, {"team": {...away box score...}}]``
+    -- confirmed against a live response, including the extra ``"team"``
+    wrapper around each element that isn't mentioned in the written docs.
+    This model exists specifically so callers get ``.home``/``.away``
+    instead of index-based access into that array: a deliberate, documented
+    exception to this client's usual fidelity-to-source-shape approach,
+    since an unlabeled positional pair is exactly the kind of thing that's
+    easy to get backwards at a call site.
+    """
+
+    home: TeamBoxScore
+    away: TeamBoxScore
